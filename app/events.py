@@ -89,7 +89,9 @@ class SessionBuilder:
         self._mull_cnt: int = 0         # 当前沿的调度次数（Keep 时落行并清零）
         self._saw_turn_gt1 = False
         self._idmap: dict[int, dict] = {}
-        self._seen_results: set[int] = set()
+        self._seen_results: set[str] = set()
+        self._last: MatchRecord | None = None   # 最近闭合的对局（迟到结果回填目标）
+        self._last_revised: bool = False        # _last 在闭合后又被补了数据
         self.dirty: bool = False        # 自上次 close 以来是否喂入过内容
 
     # ---------- 主入口 ----------
@@ -172,7 +174,14 @@ class SessionBuilder:
                 break
 
     def _on_final_result(self, jsons: list) -> None:
-        target = self._cur or (self.matches[-1] if self.matches else None)
+        # 优先进行中的对局；否则尝试最近闭合的——finalMatchResult 偶发晚于
+        # MatchCompleted 到达（Brawl 实测），监听线程的 take() 已把缓冲清空，
+        # 必须回填到 _last 并标记，由下轮 take() 重新带上（upsert 幂等）。
+        target = self._cur
+        if target is None:
+            target = self._last
+            if target is not None:
+                self._last_revised = True
         if target is None:
             return
         for d in walk_dicts(jsons):
@@ -180,9 +189,16 @@ class SessionBuilder:
             if not isinstance(fmr, dict):
                 continue
             rl = fmr.get("resultList")
-            key = id(rl)  # 同一结果对象只处理一次（重放/重复行防重）
-            if not isinstance(rl, list) or key in self._seen_results:
+            # 内容级去重（id() 会被对象地址复用误判）；键里带 match_id，
+            # 否则同一天多场同结论（如都是 Concede）的结果会互相误判重复
+            key = None
+            if isinstance(rl, list):
+                key = (f"{target.match_id}:"
+                       + json.dumps(rl, sort_keys=True, default=str))
+            if key is None or key in self._seen_results:
                 continue
+            if len(self._seen_results) > 500:
+                self._seen_results.clear()
             self._seen_results.add(key)
             my_team = target.my_team
             for entry in rl:
@@ -328,13 +344,17 @@ class SessionBuilder:
 
         与 close() 的区别：不关闭进行中的 _cur——若提前闭合，同一场
         对局的后续事件会因 _cur 为 None 被丢弃。未闭合对局由
-        MatchCompleted / 下一场开局自然落库。
+        MatchCompleted / 下一场开局自然落库。闭合后又被补数据（迟到
+        finalMatchResult）的 _last 会在标记时随下轮 take() 重新带上。
         """
         result = SessionResult(list(self.matches), list(self.ranks),
                                self.unparsed_lines)
         self.matches = []
         self.ranks = []
         self.unparsed_lines = 0
+        if self._last is not None and self._last_revised:
+            result.matches.append(self._last)
+            self._last_revised = False
         return result
 
     def _close_current(self) -> None:
@@ -347,6 +367,8 @@ class SessionBuilder:
             cur.play_draw = cur.games[0].play_draw
         self.matches.append(cur)
         self._cur = None
+        self._last = cur
+        self._last_revised = False
         self._games_won = 0
         self._game_idx = 0
         self._mull_cnt = 0

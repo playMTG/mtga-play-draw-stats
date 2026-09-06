@@ -53,6 +53,13 @@ def _watch_loop() -> None:
     ]
     _watcher = watchers[0]
     my_id = cfg.my_player_id or None
+    if my_id is None:
+        # 与 backfill 同源的身份自动探测：没有身份，座位/先后手/对手/胜负
+        # 全都解析不出来（2026-09-06 今日场次残缺的根因）
+        from .backfill import detect_player_id
+        my_id = detect_player_id([p for p in (cfg.player_log, cfg.prev_log) if p.exists()])
+        if my_id:
+            _state["my_player_id"] = my_id
     builders = [SessionBuilder(source="log", my_player_id=my_id)
                 for _ in watchers]
     conn = get_conn()

@@ -41,8 +41,9 @@ def collect_sources(cfg: Config, extra_file: Path | None = None) -> list[Path]:
     for p in (cfg.player_log, cfg.prev_log):
         if p.exists():
             files.append(p)
-    d = cfg.steam_logs_dir
-    if d.is_dir():
+    for d in cfg.session_log_dirs():
+        if not d.is_dir():
+            continue
         for f in sorted(d.glob("UTC_Log*.log")):
             try:
                 size = f.stat().st_size

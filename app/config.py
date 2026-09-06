@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -15,7 +16,11 @@ DEFAULTS: dict = {
     "log_paths": {
         "player_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player.log",
         "prev_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player-prev.log",
+        # 历史会话日志（UTC_Log-*.log）：Steam 默认位置仅作候选之一，
+        # 完整候选见 session_log_dirs()——官方客户端、Steam 多库、显式配置均支持
         "steam_session_logs": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\MTGA\\MTGA_Data\\Logs\\Logs",
+        # 额外会话日志目录（可选列表）：官方客户端自定义安装位置等场景手动指定
+        "session_logs_extra": [],
     },
     "abnormal_match": {"max_duration_sec": 150, "max_turns": 2},
     "targeting_index": {
@@ -75,6 +80,47 @@ class Config:
     @property
     def steam_logs_dir(self) -> Path:
         return self.expand(self._d["log_paths"]["steam_session_logs"])
+
+    def session_log_dirs(self) -> list[Path]:
+        """历史会话日志（UTC_Log-*.log）的全部候选目录。
+
+        覆盖三种安装形态：
+          1. Steam 默认位置（旧配置键，向后兼容）
+          2. 官方客户端：默认 %ProgramFiles%\\Wizards of the Coast\\MTGA
+          3. Steam 多库安装：解析 libraryfolders.vdf 里的所有库路径
+        另合并 config 显式指定的 session_logs_extra 列表（优先级最高场景）。
+        """
+        dirs: list[Path] = [self.steam_logs_dir]
+        lp = self._d.get("log_paths", {})
+        for s in lp.get("session_logs_extra") or []:
+            dirs.append(self.expand(str(s)))
+        # 官方客户端默认安装位置
+        for var in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(var)
+            if base:
+                dirs.append(Path(base) / "Wizards of the Coast" / "MTGA"
+                            / "MTGA_Data" / "Logs" / "Logs")
+        # Steam 多库：libraryfolders.vdf 列出所有库
+        pf86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+        vdf = Path(pf86) / "Steam" / "steamapps" / "libraryfolders.vdf"
+        if vdf.is_file():
+            try:
+                text = vdf.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            for m in re.finditer(r'"path"\s*"([^"]+)"', text):
+                lib = Path(m.group(1).replace("\\\\", "\\"))
+                dirs.append(lib / "steamapps" / "common" / "MTGA"
+                            / "MTGA_Data" / "Logs" / "Logs")
+        # 去重（Windows 路径大小写不敏感）
+        seen: set[str] = set()
+        out: list[Path] = []
+        for d in dirs:
+            key = str(d).lower().rstrip("\\")
+            if key not in seen:
+                seen.add(key)
+                out.append(d)
+        return out
 
     @property
     def my_player_id(self) -> str:

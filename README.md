@@ -25,6 +25,17 @@
 - [Python 3.11+](https://www.python.org/downloads/)（安装时勾选 **Add to PATH**）
 - MTGA 客户端已在本机运行过（产生过日志）
 
+### 客户端兼容性
+
+- **官方客户端 / Steam 客户端均支持**：实时日志（Player.log）两客户端路径相同，自动读取；历史会话日志（UTC_Log-\*.log）自动探测官方客户端默认安装位置与 Steam 全部游戏库（多库安装也能找到）
+- 安装在非默认位置？在项目根目录 `config.json`（首次运行后手动创建）里加：
+
+  ```json
+  { "log_paths": { "session_logs_extra": ["D:\\MyGames\\MTGA\\MTGA_Data\\Logs\\Logs"] } }
+  ```
+
+- **汉化 mod 兼容**：解析按 JSON 结构匹配，日志中的中文（卡名 / 玩家名等）完整无损，纯英文的原生日志同样支持
+
 ### 双击运行（推荐）
 
 1. 双击 **`start.bat`** —— 首次运行会自动创建虚拟环境并安装依赖，然后自动打开浏览器进入面板

@@ -17,30 +17,31 @@ from .config import Config
 
 
 def archive_session_logs(cfg: Config) -> list[str]:
-    """把 steam_logs_dir 下的 UTC_Log*.log 归档到 data/archive/。
+    """把全部候选目录（Steam/官方客户端/多库/显式配置）下的 UTC_Log*.log
+    归档到 data/archive/。
 
     返回本次实际（重新）复制的文件名列表；无来源目录返回空表。
     """
-    src_dir = cfg.steam_logs_dir
-    if not src_dir.is_dir():
-        return []
     dst_dir = cfg.root / "data" / "archive"
     dst_dir.mkdir(parents=True, exist_ok=True)
 
     archived: list[str] = []
-    for f in sorted(src_dir.glob("UTC_Log*.log")):
-        try:
-            src_size = f.stat().st_size
-        except OSError:
+    for src_dir in cfg.session_log_dirs():
+        if not src_dir.is_dir():
             continue
-        dst = dst_dir / f.name
-        if dst.exists() and dst.stat().st_size == src_size:
-            continue  # 已归档且大小一致
-        try:
-            shutil.copy2(f, dst)
-        except OSError:
-            continue  # 单文件失败不阻塞启动（可能正被客户端写入）
-        archived.append(f.name)
+        for f in sorted(src_dir.glob("UTC_Log*.log")):
+            try:
+                src_size = f.stat().st_size
+            except OSError:
+                continue
+            dst = dst_dir / f.name
+            if dst.exists() and dst.stat().st_size == src_size:
+                continue  # 已归档且大小一致
+            try:
+                shutil.copy2(f, dst)
+            except OSError:
+                continue  # 单文件失败不阻塞启动（可能正被客户端写入）
+            archived.append(f.name)
     return archived
 
 

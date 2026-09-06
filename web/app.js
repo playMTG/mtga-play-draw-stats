@@ -258,7 +258,8 @@ async function loadCommanders() {
 
 async function loadMatches() {
   const m = await api("/api/matches");
-  $("m-count").textContent = `共 ${m.total} 场（显示前 ${m.rows.length}）`;
+  $("m-count").textContent = `共 ${m.total} 场（显示前 ${m.rows.length}）`
+    + (m.hidden_by_filter ? ` · 另有 ${m.hidden_by_filter} 场被“排除异常/Bot”隐藏` : "");
   const tb = $("#t-m tbody");
   tb.innerHTML = m.rows
     .map((r) => {

@@ -304,7 +304,8 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                limit: int = 500, offset: int = 0, lang: str = "zh",
                exclude_bot: bool = True, family: str | None = None) -> dict:
     """对局明细（倒序），含调度次数与对手主将。"""
-    conds, args = _filters(conn, event, deck, family)
+    base_conds, base_args = _filters(conn, event, deck, family)
+    conds = list(base_conds)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
     if exclude_bot:
@@ -334,13 +335,23 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                      WHERE c.match_id=m.match_id AND c.seat!=m.my_seat) opp_cmdrs
             FROM matches m WHERE {where}
             ORDER BY m.start_time DESC LIMIT ? OFFSET ?""",
-        [*args, limit, offset],
+        [*base_args, limit, offset],
     ).fetchall()
     total = conn.execute(
-        f"SELECT COUNT(*) c FROM matches m WHERE {where}", args
+        f"SELECT COUNT(*) c FROM matches m WHERE {where}", base_args
     ).fetchone()["c"]
+    # 被排除开关隐藏的场次（同赛制/套牌口径，但含异常/bot 局）——
+    # 让“我的胜利去哪了”类困惑在界面上自解释
+    hidden = 0
+    if exclude_abnormal or exclude_bot:
+        hide_conds = list(base_conds) + ["(is_abnormal = 1 OR is_bot = 1)"]
+        hide_where = " AND ".join(["1=1"] + hide_conds)
+        hidden = conn.execute(
+            f"SELECT COUNT(*) c FROM matches m WHERE {hide_where}", base_args
+        ).fetchone()["c"]
     return {
         "total": total,
+        "hidden_by_filter": hidden,
         "rows": [
             {
                 "match_id": r["match_id"],

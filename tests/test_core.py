@@ -174,6 +174,36 @@ def test_upsert_idempotent(tmp_path):
     assert st["matches"] == 1
     assert st["games"] == 1
     assert st["with_commanders"] == 1
-    # 胜负 3-3-5：约 30s、2 回合 → 异常局
-    assert st["abnormal"] == 1
+    # 新口径：2 回合但真实发生 → 正常局（旧阈值规则已废弃，速胜不再被隐藏）
+    assert st["abnormal"] == 0
+    conn.close()
+
+
+def test_zero_turn_match_is_abnormal(tmp_path):
+    """对手秒退（没有任何 GRE 回合）→ 异常局；有回合的速胜 → 正常。"""
+    cfg = _cfg(tmp_path)
+    conn = connect(cfg.db_path)
+
+    # 0 回合：开局后对手直接离开，GRE 从未到来
+    sb = SessionBuilder(source="log", my_player_id=fx.ME)
+    for t in (fx.match_start("m-zero"), fx.final_result(winner_match=1),
+              fx.match_completed()):
+        sb.feed(t)
+    (m,) = sb.close().matches
+    upsert_match(conn, m, cfg)
+    r = conn.execute(
+        "SELECT is_abnormal, abnormal_reason FROM matches WHERE match_id='m-zero'"
+    ).fetchone()
+    assert r["is_abnormal"] == 1 and r["abnormal_reason"] == "no_game"
+
+    # 有回合的短局（对手 2 回合投降）→ 正常局，胜负计入
+    sb = SessionBuilder(source="log", my_player_id=fx.ME)
+    for t in fx.bo1_match_lines("m-short"):
+        sb.feed(t)
+    (m,) = sb.close().matches
+    upsert_match(conn, m, cfg)
+    r = conn.execute(
+        "SELECT is_abnormal FROM matches WHERE match_id='m-short'"
+    ).fetchone()
+    assert r["is_abnormal"] == 0
     conn.close()

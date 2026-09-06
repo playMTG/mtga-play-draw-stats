@@ -132,13 +132,15 @@ def tag_bot_decks(conn: sqlite3.Connection, patterns: list[str]) -> int:
 
 
 def _abnormal_flags(duration, total_turns, cfg: Config) -> tuple[int, str | None]:
-    """按 config 阈值判定异常局。"""
-    reasons = []
-    if duration is not None and duration <= cfg.abnormal_max_duration:
-        reasons.append("short_duration")
-    if total_turns is not None and total_turns <= cfg.abnormal_max_turns:
-        reasons.append("few_turns")
-    return (1, "+".join(reasons)) if reasons else (0, None)
+    """异常局 = 没真正打起来的局：回合数据为 0/缺失（对手秒退，GRE 未到）。
+
+    短时长但回合数 > 0 的对局是真实胜负（争锋里对手提前投降很常见，
+    且计入游戏内胜场进度），照常计分 —— “打得快”≠“没打”。
+    旧规则（时长/回合阈值）会把速胜误判成异常并从默认视图隐藏。
+    """
+    if total_turns is None or total_turns <= 0:
+        return (1, "no_game")
+    return (0, None)
 
 
 def upsert_match(conn: sqlite3.Connection, m: MatchRecord, cfg: Config) -> bool:

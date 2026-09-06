@@ -1,0 +1,30 @@
+{
+  "port": 8765,
+  "db_path": "data/mtga_stats.db",
+  "log_paths": {
+    "player_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player.log",
+    "prev_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player-prev.log",
+    "steam_session_logs": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\MTGA\\MTGA_Data\\Logs\\Logs"
+  },
+  "abnormal_match": {
+    "max_duration_sec": 150,
+    "max_turns": 2
+  },
+  "targeting_index": {
+    "weights": {
+      "play_draw": 0.25,
+      "matchup": 0.35,
+      "mulligan": 0.2,
+      "streak": 0.2
+    },
+    "min_sample": 20,
+    "p_normal": 0.10
+  },
+  "my_deck_tags": {},
+  "card_name_lang": "zh",
+  "bot_deck_patterns": ["bot"],
+  "untapped_import": {
+    "account_id": "",
+    "player_id": ""
+  }
+}

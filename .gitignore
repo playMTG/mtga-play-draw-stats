@@ -1,0 +1,24 @@
+# ---- 对局与个人数据：绝不提交 ----
+data/
+config.json
+.workbuddy/
+
+# ---- 运行产物 ----
+*.log
+*.db
+*.sqlite*
+__pycache__/
+.venv/
+.pytest_cache/
+
+# ---- 本机私有补充（额外的隐私黑名单词，一行一个） ----
+.privacy-extra.txt
+
+# ---- 编辑器/系统 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---- 开发期一次性脚本（不发布） ----
+tools/dev/

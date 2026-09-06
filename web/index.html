@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTGA 先后手统计</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --border:#e2e5ea; --text:#24292f; --muted:#6b7280;
+  --accent:#0969da; --win:#c94a3d; --loss:#1a7f5a; --warn:#b08800; --chip:#eef1f5;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);padding:20px;max-width:1200px;margin:0 auto}
+h1{font-size:20px;margin-bottom:4px}
+h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600}
+.sub{color:var(--muted);font-size:12px;margin-bottom:16px}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+select,button{font:inherit;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--panel);cursor:pointer}
+button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+.big{font-size:28px;font-weight:700}
+.big .muted{font-size:13px;color:var(--muted);font-weight:400}
+.ci{font-size:12px;color:var(--muted)}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:var(--chip);color:var(--muted)}
+.tag.win{background:#fbe9e7;color:var(--win)}
+.tag.loss{background:#e6f4ee;color:var(--loss)}
+.tag.abn{background:#fff4d6;color:var(--warn)}
+.dim{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13px}
+.dim .dim-name{width:64px;flex:none}
+.dim .dim-desc{width:190px;flex:none;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dim .bar-track{flex:1;height:8px;background:var(--chip);border-radius:4px;overflow:hidden}
+.dim .bar-fill{height:100%;background:var(--win);border-radius:4px}
+.dim .dim-score{width:34px;flex:none;text-align:right;font-variant-numeric:tabular-nums}
+.dim.dim-off{opacity:.45}
+.ti-btn{padding:1px 8px;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:12px;position:sticky;top:0;background:var(--panel)}
+tbody tr:hover{background:#f0f4fa}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.wrap{overflow:auto;max-height:420px;border:1px solid var(--border);border-radius:8px}
+.status{font-size:12px;color:var(--muted);margin-left:auto}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bbb;margin-right:4px}
+.dot.ok{background:#1a7f5a}
+canvas{max-height:220px}
+abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
+</style>
+</head>
+<body>
+<h1>MTGA 先后手统计</h1>
+<div class="sub">本地数据面板 · 数据来源：MTGA 客户端日志 · 无任何外联</div>
+
+<div class="bar">
+  <label>赛制 <select id="f-family"><option value="">全部</option></select></label>
+  <label>赛事 <select id="f-event"><option value="">全部</option></select></label>
+  <label>套牌 <select id="f-deck"><option value="">全部</option></select></label>
+  <button id="f-abn" class="on">排除异常局</button>
+  <button id="f-bot" class="on">排除 Bot 局</button>
+  <button id="btn-export-m">导出对局 CSV</button>
+  <button id="btn-export-r">导出段位 CSV</button>
+  <span class="status"><span class="dot" id="watch-dot"></span><span id="watch-txt">…</span></span>
+</div>
+
+<div class="grid g3" style="margin-bottom:14px">
+  <div class="card"><h2>总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div></div>
+  <div class="card"><h2>先手（ON PLAY）</h2><div class="big" id="k-play">–</div><div class="ci" id="k-play-ci"></div></div>
+  <div class="card"><h2>后手（ON DRAW）</h2><div class="big" id="k-draw">–</div><div class="ci" id="k-draw-ci"></div></div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <h2>先后手局数分布</h2>
+  <div style="display:flex;align-items:center;gap:10px">
+    <div id="pd-dist" style="flex:1;display:flex;align-items:center">–</div>
+    <span class="ci" id="pd-dist-txt" style="white-space:nowrap"></span>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <h2>你被针对了吗
+    <button id="ti-7" class="ti-btn" style="margin-left:8px">近 7 天</button>
+    <button id="ti-30" class="ti-btn on">近 30 天</button>
+    <button id="ti-all" class="ti-btn">全部</button>
+  </h2>
+  <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+    <div style="min-width:130px;text-align:center">
+      <div class="big" id="ti-score">–</div>
+      <div class="ci" id="ti-label"></div>
+    </div>
+    <div style="flex:1;min-width:300px" id="ti-dims"></div>
+  </div>
+  <div class="ci" id="ti-nemeses" style="margin-top:8px"></div>
+  <div class="ci" id="ti-note" style="margin-top:4px"></div>
+</div>
+
+<div class="grid g2">
+  <div class="card"><h2>先后手胜率对比 <abbr title="误差线为 Wilson 95% 置信区间">ⓘ</abbr></h2><canvas id="c-pd"></canvas></div>
+  <div class="card"><h2>周趋势</h2><canvas id="c-trend"></canvas></div>
+  <div class="card"><h2>按赛事</h2><canvas id="c-event"></canvas></div>
+  <div class="card"><h2>调度与胜负</h2><div id="mull-box"></div></div>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <h2>
+    段位曲线 <span class="ci" id="rank-hint"></span>
+    <button id="rk-c" class="on" style="margin-left:8px;padding:1px 8px;font-size:12px">构组</button>
+    <button id="rk-l" style="padding:1px 8px;font-size:12px">轮抽</button>
+  </h2>
+  <canvas id="c-rank" style="max-height:260px"></canvas>
+  <div class="ci" style="margin-top:6px">仅显示带时间戳的段位快照；相邻相同段位合并。早期无时间戳的记录无法定位，不参与曲线。</div>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <h2>对手主将档案 <span class="ci" id="cmdr-hint"></span></h2>
+  <div class="wrap"><table id="t-cmdr"><thead><tr>
+    <th>主将</th><th>类型</th><th>场次</th><th>胜率</th><th>先手</th><th>后手</th><th>打标</th>
+  </tr></thead><tbody></tbody></table></div>
+  <div class="ci" style="margin-top:6px">类型来源：手动打标 &gt; commander_archetypes.json 先验；手动打标自动沉淀为该主将的固定档案</div>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <h2>对局明细 <span class="ci" id="m-count"></span></h2>
+  <div class="wrap" style="max-height:520px"><table id="t-m"><thead><tr>
+    <th>时间</th><th>赛事</th><th>先后</th><th>结果</th><th>回合</th><th>用时</th>
+    <th>调度</th><th>对手</th><th>对手主将</th><th>结束原因</th><th>标记</th>
+  </tr></thead><tbody></tbody></table></div>
+</div>
+
+<script src="chart.umd.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

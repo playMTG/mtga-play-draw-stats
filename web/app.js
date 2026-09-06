@@ -394,19 +394,37 @@ async function reload() {
 // ---------- 你被针对了吗（§3.5） ----------
 let tiWindow = "30";
 
+function dimVerdictColor(v) {
+  return v === "高度可疑" ? "var(--win)"
+    : v === "偏邪门" ? "#d4501a"
+    : v === "有点怪" ? "var(--warn)"
+    : "var(--loss)";
+}
+
 function dimBar(d) {
   if (!d.enough) {
     return `<div class="dim dim-off">
-      <span class="dim-name">${d.label}</span>
-      <span class="dim-desc">样本 ${d.n} 场，不足 ${d.min_sample ?? ""} 不计分</span>
-      <div class="bar-track"></div><span class="dim-score">–</span></div>`;
+      <div class="dim-head">
+        <span class="dim-name">${d.label}</span>
+        <span class="dim-badge">样本不足</span>
+        <div class="bar-track"><div class="bar-fill" style="width:0"></div></div>
+        <span class="dim-score">–</span>
+      </div>
+      <div class="dim-plain">目前只有 ${d.n} 场样本，不足 ${d.min_sample} 场，暂不评分。</div>
+    </div>`;
   }
-  const score = d.score ?? 50;
-  return `<div class="dim" ${score >= 70 ? "" : 'style="opacity:.85"'}>
-    <span class="dim-name">${d.label}</span>
-    <span class="dim-desc">${d.obs_desc} · ${d.exp_desc} · p=${d.p}</span>
-    <div class="bar-track"><div class="bar-fill" style="width:${score}%"></div></div>
-    <span class="dim-score">${Math.round(score)}</span></div>`;
+  const score = Math.round(d.score ?? 50);
+  const v = d.verdict || "正常";
+  const col = dimVerdictColor(v);
+  return `<div class="dim">
+    <div class="dim-head" title="统计检验 p 值 = ${d.p}（越小越不寻常）">
+      <span class="dim-name">${d.label}</span>
+      <span class="dim-badge" style="color:${col};border-color:${col}">${v}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${score}%;background:${col}"></div></div>
+      <span class="dim-score" style="color:${col}">${score}</span>
+    </div>
+    <div class="dim-plain">${d.plain || ""}</div>
+  </div>`;
 }
 
 async function loadTargeting() {
@@ -417,7 +435,8 @@ async function loadTargeting() {
     lb.textContent = "样本不足，暂不计分";
   } else {
     sc.textContent = r.composite;
-    lb.textContent = r.label;
+    const nEnough = Object.values(r.dimensions).filter((d) => d.enough).length;
+    lb.textContent = `${r.label}（${nEnough} 个维度综合，50 分＝正常）`;
     sc.style.color = r.composite >= 85 ? "var(--win)"
       : r.composite >= 70 ? "var(--warn)" : "var(--text)";
   }

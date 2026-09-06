@@ -700,16 +700,30 @@ def _ti_cfg(cfg) -> dict:
 
 
 def _dim(label: str, n: int, observed, expected, p: float, min_sample: int,
-         obs_desc: str, exp_desc: str) -> dict:
+         obs_desc: str, exp_desc: str, plain: str = "") -> dict:
     enough = n >= min_sample
     return {
         "label": label, "n": n, "min_sample": min_sample,
         "observed": observed, "expected": expected,
         "obs_desc": obs_desc, "exp_desc": exp_desc,
+        "plain": plain,
         "p": round(p, 6) if p == p else 1.0,
         "score": p_to_score(p) if enough else None,
         "enough": enough,
     }
+
+
+def _verdict(score: float | None) -> str | None:
+    """维度分数 → 一眼能懂的结论词（50=正常基线，越高越邪门）。"""
+    if score is None:
+        return None
+    if score < 60:
+        return "正常"
+    if score < 70:
+        return "有点怪"
+    if score < 85:
+        return "偏邪门"
+    return "高度可疑"
 
 
 def targeting_index(conn: sqlite3.Connection, cfg=None,
@@ -744,14 +758,21 @@ def targeting_index(conn: sqlite3.Connection, cfg=None,
     r = conn.execute(
         f"""SELECT SUM(play_draw='play') p, COUNT(*) n FROM matches
             WHERE {where} AND play_draw IS NOT NULL""", wargs).fetchone()
+    a_plain = ""
     a_dim = _dim(
         "先后手运", r["n"], r["p"] or 0, (r["n"] or 0) / 2, 1.0, min_n,
         f"先手 {r['p'] or 0}/{r['n'] or 0} 场", "期望先手约一半",
     )
     if a_dim["n"]:
+        pct = (r["p"] or 0) * 100.0 / r["n"]
+        a_plain = (f"你 {r['n']} 场里有 {r['p'] or 0} 场先手（占 {pct:.1f}%）。"
+                   f"MTGA 理论上先后手各占一半。")
         a_dim["p"] = round(binom_cdf(int(r["p"] or 0), r["n"], 0.5), 6)
         if a_dim["enough"]:
             a_dim["score"] = p_to_score(a_dim["p"], p_normal)
+            a_plain += ("偏差在正常运气范围内。" if a_dim["score"] < 60
+                        else "先手明显偏少，超出了运气波动范围。")
+        a_dim["plain"] = a_plain
 
     # ---- C. 起手运：调度局占比 vs 基线调度率（单侧：调多了=被针对）----
     r = conn.execute(
@@ -768,9 +789,14 @@ def targeting_index(conn: sqlite3.Connection, cfg=None,
         f"基线调度率 {r0:.0%}",
     )
     if c_dim["n"]:
-        c_dim["p"] = round(binom_sf(int(r["mu"] or 0), r["n"], r0), 6)
+        pct_c = (r["mu"] or 0) * 100.0 / c_dim["n"]
+        c_dim["plain"] = (f"{c_dim['n']} 场里有 {r['mu'] or 0} 场你调度过"
+                          f"（占 {pct_c:.1f}%），一般玩家约 {r0:.0%}。")
+        c_dim["p"] = round(binom_sf(int(r["mu"] or 0), c_dim["n"], r0), 6)
         if c_dim["enough"]:
             c_dim["score"] = p_to_score(c_dim["p"], p_normal)
+            c_dim["plain"] += ("调度频率正常。" if c_dim["score"] < 60
+                               else "调度明显偏多，起手质量异常。")
 
     # ---- D. 连败运：最大连败长度 vs 该胜率下的合理范围 ----
     rows = conn.execute(
@@ -786,8 +812,12 @@ def targeting_index(conn: sqlite3.Connection, cfg=None,
         d_dim["p"] = round(streak_sf(streak, n_d, wrate), 6)
         d_dim["obs_desc"] = f"最大连败 {streak}"
         d_dim["exp_desc"] = f"整体胜率 {wrate:.0%}"
+        d_dim["plain"] = (f"你最长一次连败 {streak} 场，整体胜率 {wrate:.0%}。")
         if d_dim["enough"]:
             d_dim["score"] = p_to_score(d_dim["p"], p_normal)
+            d_dim["plain"] += ("这个连败长度在该胜率下完全正常。"
+                               if d_dim["score"] < 60 else
+                               f"以 {wrate:.0%} 的胜率连败 {streak} 场极其罕见，运气异常。")
 
     # ---- B. 对手运：遭遇类型分布 偏离 此前基线（卡方）+ 克星列表 ----
     b_window_days = window_days or 30
@@ -830,6 +860,8 @@ def targeting_index(conn: sqlite3.Connection, cfg=None,
     b_dim = _dim(
         "对手运", win_n, win_counts, base_counts, 1.0, min_n,
         f"近 {b_window_days} 天 {win_n} 场遭遇", f"基线 {base_n} 场分布",
+        plain=(f"最近 {b_window_days} 天遇到的 {win_n} 个对手，"
+               f"和之前 {base_n} 场的对手类型分布对比。"),
     )
     if win_n and base_n and b_dim["enough"]:
         stat = 0.0
@@ -853,6 +885,8 @@ def targeting_index(conn: sqlite3.Connection, cfg=None,
             b_dim["score"] = p_to_score(b_dim["p"], p_normal)
             b_dim["observed"] = round(stat, 2)
             b_dim["expected"] = f"卡方 {stat:.1f} (df={df})"
+            b_dim["plain"] += ("对手类型构成正常。" if b_dim["score"] < 60
+                               else "对手类型构成明显改变，像是被刻意匹配。")
 
     # 克星列表：窗口内遭遇 ≥3 次且我方胜率 <40% 的对手主将
     nemeses = []
@@ -884,6 +918,8 @@ def targeting_index(conn: sqlite3.Connection, cfg=None,
             num += w_k * d["score"]
             den += w_k
     composite = round(num / den, 1) if den > 0 else None
+    for d in dims.values():
+        d["verdict"] = _verdict(d["score"] if d["enough"] else None)
     return {
         "window_days": window_days,
         "dimensions": dims,

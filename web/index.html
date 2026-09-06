@@ -28,12 +28,14 @@ button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .tag.win{background:#fbe9e7;color:var(--win)}
 .tag.loss{background:#e6f4ee;color:var(--loss)}
 .tag.abn{background:#fff4d6;color:var(--warn)}
-.dim{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13px}
-.dim .dim-name{width:64px;flex:none}
-.dim .dim-desc{width:190px;flex:none;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dim{margin:8px 0;font-size:13px}
+.dim .dim-head{display:flex;align-items:center;gap:8px}
+.dim .dim-name{width:64px;flex:none;font-weight:600}
+.dim .dim-badge{flex:none;font-size:11px;padding:0 7px;line-height:17px;border:1px solid currentColor;border-radius:9px;white-space:nowrap}
 .dim .bar-track{flex:1;height:8px;background:var(--chip);border-radius:4px;overflow:hidden}
-.dim .bar-fill{height:100%;background:var(--win);border-radius:4px}
-.dim .dim-score{width:34px;flex:none;text-align:right;font-variant-numeric:tabular-nums}
+.dim .bar-fill{height:100%;border-radius:4px}
+.dim .dim-score{width:30px;flex:none;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.dim .dim-plain{color:var(--muted);font-size:12px;margin-top:2px;line-height:1.55}
 .dim.dim-off{opacity:.45}
 .ti-btn{padding:1px 8px;font-size:12px}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -91,6 +93,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
     </div>
     <div style="flex:1;min-width:300px" id="ti-dims"></div>
   </div>
+  <div class="ci" style="margin-top:6px">分数解读：50 分＝统计上正常 · 分数越高越邪门 · 85+ 高度可疑（悬停维度行可看检验数值）</div>
   <div class="ci" id="ti-nemeses" style="margin-top:8px"></div>
   <div class="ci" id="ti-note" style="margin-top:4px"></div>
 </div>

@@ -317,10 +317,11 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         conn.execute("SELECT 1 FROM cards_db.cards LIMIT 1")
         name_base = ("COALESCE(cards.name_zh, cards.name)"
                      if lang == "zh" else "cards.name")
-        cmdr_expr = f"GROUP_CONCAT(COALESCE({name_base}, 'grpId:' || c.grp_id))"
+        # 分隔符用 ';;'：卡名自带逗号（如 "Ajani, Nacatl Pariah"），默认 ',' 会误切
+        cmdr_expr = f"GROUP_CONCAT(COALESCE({name_base}, 'grpId:' || c.grp_id), ';;')"
         join_sql = ("LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id")
     except sqlite3.OperationalError:
-        cmdr_expr = "GROUP_CONCAT('grpId:' || c.grp_id)"
+        cmdr_expr = "GROUP_CONCAT('grpId:' || c.grp_id, ';;')"
         join_sql = ""
 
     rows = conn.execute(
@@ -369,7 +370,7 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                 "my_deck_tag": r["my_deck_tag"],
                 "source": r["source"],
                 "my_mulls": r["my_mulls"],
-                "opp_cmdrs": (r["opp_cmdrs"] or "").split(",") if r["opp_cmdrs"] else [],
+                "opp_cmdrs": (r["opp_cmdrs"] or "").split(";;") if r["opp_cmdrs"] else [],
             }
             for r in rows
         ],
@@ -611,11 +612,11 @@ def export_rows(conn: sqlite3.Connection, kind: str = "matches",
         conn.execute("SELECT 1 FROM cards_db.cards LIMIT 1")
         name_base = "COALESCE(cards.name_zh, cards.name)"
         cmdr_sub = ("(SELECT GROUP_CONCAT(COALESCE(" + name_base +
-                    ", 'grpId:' || c.grp_id)) FROM commanders c "
+                    ", 'grpId:' || c.grp_id), ';;') FROM commanders c "
                     "LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id "
                     "WHERE c.match_id=m.match_id AND c.seat!=m.my_seat)")
     except sqlite3.OperationalError:
-        cmdr_sub = ("(SELECT GROUP_CONCAT('grpId:' || c.grp_id) FROM commanders c "
+        cmdr_sub = ("(SELECT GROUP_CONCAT('grpId:' || c.grp_id, ';;') FROM commanders c "
                     "WHERE c.match_id=m.match_id AND c.seat!=m.my_seat)")
     rows = conn.execute(
         f"""SELECT m.*, (SELECT COALESCE(SUM(mu.kept_on),0) FROM mulligans mu

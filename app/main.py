@@ -99,6 +99,27 @@ def _watch_loop() -> None:
         time.sleep(2)
 
 
+def _cards_sync_loop() -> None:
+    """卡名自动同步线程：发现没见过的 grpId 就地从 Scryfall 拉取。
+
+    启动即同步一次（覆盖回填新入库的主将），之后每 5 分钟增量检查——
+    保证"第一次遇到的对手主将"自动补全卡名，无需手动跑 tools/update_cards。
+    """
+    from .cards_sync import cards_db_connect, sync_pending_cards
+
+    stats_conn = sqlite3.connect(cfg.db_path, check_same_thread=False)
+    stats_conn.row_factory = sqlite3.Row
+    cards_conn = cards_db_connect(cfg.root / "data" / "mtga_cards.db")
+    while True:
+        try:
+            ok, total = sync_pending_cards(stats_conn, cards_conn)
+            if total:
+                _state["cards_synced"] = _state.get("cards_synced", 0) + ok
+        except Exception:
+            pass  # 网络失败不杀线程，下个周期重试
+        time.sleep(300)
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     # 启动回填（幂等）：三个日志来源；服务端随后单独持一条连接
@@ -125,6 +146,8 @@ def on_startup() -> None:
         t = threading.Thread(target=_watch_loop, daemon=True)
         t.start()
         _state["watching"] = True
+    t2 = threading.Thread(target=_cards_sync_loop, daemon=True)
+    t2.start()
 
 
 @app.on_event("shutdown")

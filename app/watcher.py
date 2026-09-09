@@ -37,6 +37,9 @@ class LogWatcher:
         self.poll_sec = poll_sec
         self._fp: _Fingerprint | None = None
         self._asm = RecordAssembler()
+        self._identity = None
+        self._prefix = b""
+        self._ts = None
 
     def _current_size(self) -> int | None:
         try:
@@ -49,20 +52,33 @@ class LogWatcher:
         size = self._current_size()
         if size is None:
             return
+        st = self.path.stat()
+        identity = (st.st_dev, st.st_ino)
+        with self.path.open("rb") as f:
+            prefix = f.read(min(size, 256))
+        replaced = (self._identity is not None and identity != self._identity)
+        replaced |= bool(self._prefix and not prefix.startswith(self._prefix))
+        self._identity = identity
         if self._fp is None:
             self._fp = _Fingerprint(self.path, size, 0)
-        elif size < self._fp.offset:  # 截断/重建/滚动
+        elif replaced or size < self._fp.offset:
             # 旧文件若仍以改名形式存在（prev），由调用方决定是否补读；
             # 先把组装器里未闭合的块兜底产出，再把当前文件当新文件从头读。
-            yield from self._flush_asm()
+            self._asm = RecordAssembler()
+            self._ts = None
             self._fp = _Fingerprint(self.path, size, 0)
+        self._prefix = prefix
         if size > self._fp.offset:
             for rec in iter_lines(self.path, start_offset=self._fp.offset):
+                if not rec.text.endswith("\n"):
+                    break  # 半行留到下一次读取，避免 UTF-8 或 JSON 被切断
                 self._fp.offset += rec.nbytes
+                if rec.ts_ms is not None:
+                    self._ts = rec.ts_ms
                 for done in self._asm.feed(rec.text):
                     # 逻辑记录的时间戳：iter_lines 的 ts_ms 跨行延续，
                     # 多行块的时间戳通常在首行，此处已携带正确上下文
-                    yield LineRecord(rec.line_no, done, rec.ts_ms)
+                    yield LineRecord(rec.line_no, done, self._ts)
         else:
             self._fp.size = size
 

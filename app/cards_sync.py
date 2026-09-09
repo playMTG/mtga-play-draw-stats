@@ -98,10 +98,9 @@ def fetch_zh_name(set_code: str, collector_number: str) -> str | None:
     """从 Scryfall 本地化接口取中文 printed_name（无中文的卡返回 None）。
 
     Arena 专属印刷编号带 A- 前缀（如 A-193），该编号在 Scryfall 语言
-    路由下查不到本地化；剥掉前缀按同编号正印查询作为回退。
+    路由下查不到本地化；不剥掉前缀冒用原版印刷，缺译名时保留英文。
     """
-    candidates = list(dict.fromkeys(
-        [collector_number, collector_number.removeprefix("A-")]))
+    candidates = [collector_number]
     for cn in candidates:
         data = _curl_json(SCRYFALL_ZH.format(set=set_code, cn=cn))
         if data is None or data.get("object") == "error":
@@ -109,11 +108,14 @@ def fetch_zh_name(set_code: str, collector_number: str) -> str | None:
         # 双面卡：printed_name 在 card_faces 里；单面卡在顶层
         name = data.get("printed_name")
         if not name and data.get("card_faces"):
+            # 多名称牌只要一面有译名即可；其他面明确保留英文。
+            if not any(f.get("printed_name") for f in data["card_faces"]):
+                continue
             name = " // ".join(
                 f.get("printed_name") or f.get("name") or ""
                 for f in data["card_faces"]
             )
-        if name:
+        if name and all(part.strip() for part in name.split(" // ")):
             return name
     return None
 

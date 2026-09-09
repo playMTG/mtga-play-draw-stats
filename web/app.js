@@ -2,8 +2,11 @@
 "use strict";
 
 const $ = (sel) => sel.includes(" ") ? document.querySelector(sel) : document.getElementById(sel);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const localDay = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+let matchDay = "", matchLimit = 200, matchOffset = 0;
 const fmtTime = (ms) =>
-  ms ? new Date(ms).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
+  ms ? new Date(ms).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
 const fmtDur = (s) => {
   if (s == null) return "–";
   const m = Math.round(s / 60);
@@ -15,7 +18,6 @@ let rankTrack = "constructed";
 
 function params() {
   const p = new URLSearchParams();
-  p.set("exclude_abnormal", $("f-abn").classList.contains("on"));
   p.set("exclude_bot", $("f-bot").classList.contains("on"));
   const f = $("f-family").value, e = $("f-event").value, d = $("f-deck").value;
   if (f) p.set("family", f);
@@ -126,8 +128,19 @@ function trendChartDraw(rows) {
 }
 
 async function loadOverview() {
+  const scope = String(params());
   const o = await api("/api/overview");
+  if (scope !== String(params())) return;
+  const rates = o.play_draw_rates;
+  $("k-play-rate").textContent = rates.play_rate == null ? "无样本" : `${rates.play_rate}%`;
+  $("k-draw-rate").textContent = rates.draw_rate == null ? "无样本" : `${rates.draw_rate}%`;
+  $("k-play-rate-note").textContent = `先手 ${rates.play} 场 · 后手 ${rates.draw} 场 · 未知 ${rates.unknown} 场`;
+  $("k-draw-rate-note").textContent = "全史 · 当前筛选 · 比例仅含先后手已知的有结果对局";
   bigCard("k-total", "k-total-ci", o.total);
+  if (o.hidden) {
+    $("k-total-ci").textContent +=
+      ` · 另有 ${o.hidden} 场未计入（Bot 局，见下方对局列表）`;
+  }
   bigCard("k-play", "k-play-ci", o.on_play);
   bigCard("k-draw", "k-draw-ci", o.on_draw);
 
@@ -169,13 +182,15 @@ async function loadOverview() {
   eventChart = new Chart($("c-event"), {
     type: "bar",
     data: {
-      labels: ev.map((r) => r.key),
+      labels: ev.map((r) => r.label || r.key),
       datasets: [{ data: ev.map((r) => r.wr), backgroundColor: "#5a7db8", borderRadius: 4 }],
     },
     options: {
       indexAxis: "y",
       responsive: true,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        title: items => items.length ? ev[items[0].dataIndex].key : ""
+      } } },
       scales: { x: { min: 0, max: 100, ticks: { callback: (v) => v + "%" } } },
     },
   });
@@ -184,10 +199,10 @@ async function loadOverview() {
 async function loadMulligans() {
   const m = await api("/api/mulligans");
   const dist = m.kept_on_dist
-    .map((d) => `第${d.kept_on}张后留 ${d.count} 次`)
+    .map((d) => `调度 ${d.kept_on} 次后留牌：${d.count} 局`)
     .join(" · ");
   const by = m.by_mulligan
-    .map((r) => `<span class="tag ${r.key === "mulligan" ? "abn" : "loss"}">${r.key === "mulligan" ? "调度过" : "全留起手"} ${r.wr ?? "–"}%（${r.n}）</span>`)
+    .map((r) => `<span class="tag ${r.key === "mulligan" ? "abn" : "loss"}">${r.key === "mulligan" ? "调度过" : r.key === "clean" ? "已知未调度" : "调度未知"} ${r.wr ?? "–"}%（${r.n}）</span>`)
     .join(" ");
   $("mull-box").innerHTML = `
     <div style="margin-bottom:8px">${by || "无数据"}</div>
@@ -216,9 +231,9 @@ async function tagOpp(key, tag) {
   const p = new URLSearchParams();
   p.set("commander", key);
   p.set("tag", tag);
-  const r = await fetch("/api/opp_tag_by_name", { method: "POST", body: p });
+  const r = await fetch(`/api/opp_tag_by_name?${p}`, { method: "POST" });
   const j = await r.json();
-  if (j.ok) reload();
+  if (j.ok) reload(); else alert(j.error || "保存失败，请重试");
 }
 
 async function loadCommanders() {
@@ -233,55 +248,156 @@ async function loadCommanders() {
     // 不注明会被误读成"解析丢数据"（如 1000+ 场争锋只统计到个位数对手）
     if (cov && cov.total) {
       const pct = (100 * cov.with_cmdr / cov.total).toFixed(1);
-      hint += ` · 样本覆盖 ${cov.with_cmdr}/${cov.total} 场（${pct}%，仅本地日志对局含对手主将，云史无此数据）`;
+      hint += ` · 样本覆盖 ${cov.with_cmdr}/${cov.total} 场（${pct}%，当前筛选中主将赛制；含日志与可解码历史）`;
     }
   }
-  $("cmdr-hint").textContent = hint;
+  $("cmdr-hint").textContent = hint || "当前筛选没有可识别主将；非主将赛制不适用";
   const tb = $("#t-cmdr tbody");
   tb.innerHTML = c
     .map(
       (r) => {
         const delta = r.on_play.n && r.on_draw.n ? (r.on_play.wr - r.on_draw.wr) : null;
         return `<tr>
-        <td>${r.name}</td>
+        <td><details><summary>${cardMarkup(r)}</summary><div class="ci">${esc(r.name_en || "英文未记录")}<br>${esc(r.name_source)} · grpId:${esc(r.key)}</div></details></td>
         <td>${archTag(r.archetype)}</td>
         <td class="num">${r.n}</td>
         <td class="num" style="color:${(r.wr ?? 0) >= 50 ? "var(--win)" : "var(--loss)"}">${r.wr ?? "–"}%</td>
         <td class="num">${r.on_play.n ? `${r.on_play.wr}% (${r.on_play.n})` : "–"}</td>
         <td class="num">${r.on_draw.n ? `${r.on_draw.wr}% (${r.on_draw.n})` : "–"}${delta != null ? ` <span class="ci">Δ${delta > 0 ? "+" : ""}${delta.toFixed(0)}</span>` : ""}</td>
-        <td>${archSelect(r.name, r.archetype)}</td>
+        <td>${archSelect("grpId:" + r.key, r.archetype)}</td>
       </tr>`;
       }
     )
     .join("") || `<tr><td colspan="7" class="ci">暂无主将数据</td></tr>`;
 }
 
+function cardMarkup(card) {
+  if (!card) return "–";
+  const hint = [card.name_en, card.name_source, card.key ? `grpId:${card.key}` : ""].filter(Boolean).join(" · ");
+  return `<span title="${esc(hint)}">${esc(card.name)}</span>`;
+}
+function cardsMarkup(cards, fallback = []) {
+  return cards?.length ? cards.map(cardMarkup).join(" / ") : esc(fallback.join(" / ") || "–");
+}
+
+function sourceLabel(source) {
+  return source === "untapped" ? "Untapped 历史导入" : source === "log" ? "本地日志" : (source || "未记录");
+}
+
+function endReasonLabel(reason) {
+  return ({Concede:"投降", Game:"正常结束", Timeout:"超时"})[reason] || reason || "未记录";
+}
+
+function matchDetails(r) {
+  const items = [
+    ["回合", r.total_turns ?? "未记录"], ["用时", fmtDur(r.duration_sec)],
+    ["我方调度", r.my_mulls ?? "未记录"], ["结束原因", endReasonLabel(r.end_reason)],
+    ["数据来源", sourceLabel(r.source)], ["对局编号", r.match_id || "未记录"],
+  ];
+  if (r.my_deck_id) items.push(["套牌 ID", r.my_deck_id]);
+  if (r.my_deck_version) items.push(["构筑版本", r.my_deck_version]);
+  if (r.is_bot) items.push(["记录标记", "Bot 局"]);
+  if (r.is_abnormal || r.abnormal_reason) items.push(["诊断标记", r.abnormal_reason || "异常"]);
+  return `<details><summary>查看</summary><div class="match-details ci">${items.map(
+    ([label,value]) => `<span><strong>${esc(label)}：</strong>${esc(value)}</span>`
+  ).join("")}</div></details>`;
+}
+
+function matchRow(r) {
+  const ownCommander = r.my_cards?.length || r.my_cmdrs?.length
+    ? cardsMarkup(r.my_cards, r.my_cmdrs) : "未记录";
+  return `<tr>
+    <td>${fmtTime(r.start_time)}</td><td>${eventMarkup(r.event_id, r.event_label)}</td>
+    <td class="clip" title="${esc(r.my_deck_tag || "套牌未记录")}">${esc(r.my_deck_tag || "套牌未记录")}</td>
+    <td>${ownCommander}</td>
+    <td>${r.play_draw === "play" ? "先手" : r.play_draw === "draw" ? "后手" : "未知"}</td>
+    <td>${r.my_result === "win" ? "胜" : r.my_result === "loss" ? "负" : "待确认"}</td>
+    <td>${esc(r.opponent_name || "–")}</td><td>${cardsMarkup(r.opp_cards, r.opp_cmdrs)}</td>
+    <td>${matchDetails(r)}</td>
+  </tr>`;
+}
+
+function eventMarkup(raw, label) {
+  const name = label || raw || "赛事未记录";
+  return `<span title="${esc(raw || '赛事未记录')}">${esc(name)}</span>`;
+}
+
 async function loadMatches() {
-  const m = await api("/api/matches");
-  $("m-count").textContent = `共 ${m.total} 场（显示前 ${m.rows.length}）`
-    + (m.hidden_by_filter ? ` · 另有 ${m.hidden_by_filter} 场被“排除异常/Bot”隐藏` : "");
-  const tb = $("#t-m tbody");
-  tb.innerHTML = m.rows
-    .map((r) => {
-      const tags = [];
-      if (r.is_abnormal) tags.push(`<span class="tag abn">异常 ${r.abnormal_reason || ""}</span>`);
-      if (r.is_bot) tags.push(`<span class="tag">Bot</span>`);
-      if (r.source === "untapped") tags.push(`<span class="tag">云史</span>`);
-      return `<tr>
-        <td>${fmtTime(r.start_time)}</td>
-        <td>${r.event_id || "–"}</td>
-        <td>${r.play_draw === "play" ? "先手" : r.play_draw === "draw" ? "后手" : "–"}</td>
-        <td><span class="tag ${r.my_result === "win" ? "win" : "loss"}">${r.my_result === "win" ? "胜" : r.my_result === "loss" ? "负" : "–"}</span></td>
-        <td class="num">${r.total_turns ?? "–"}</td>
-        <td class="num">${fmtDur(r.duration_sec)}</td>
-        <td class="num">${r.my_mulls || 0}</td>
-        <td>${r.opponent_name || "–"}</td>
-        <td>${r.opp_cmdrs.map((c) => `<code>${c}</code>`).join(" ") || "–"}</td>
-        <td class="ci">${(r.end_reason || "").replace("ResultReason_", "")}</td>
-        <td>${tags.join(" ") || ""}</td>
-      </tr>`;
-    })
-    .join("");
+  const m = await api("/api/matches", { limit: matchLimit, offset: matchOffset, ...(matchDay ? {day:matchDay} : {}) });
+  $("m-count").textContent = `共 ${m.total} 场（本页 ${m.rows.length} 场，第 ${Math.floor(matchOffset / matchLimit) + 1} 页）`;
+  $("m-day-label").textContent = matchDay || "全部日期";
+  $("m-more").disabled = matchOffset + m.rows.length >= m.total;
+  $("m-prev").disabled = matchOffset === 0;
+  const mode = $("m-group").value;
+  const grouped = new Map();
+  for (const r of m.rows) {
+    const key = mode === "event" ? (r.event_id || "未知赛事") : mode === "deck" ? (r.my_deck_tag || "未知套牌")
+      : mode === "commander" ? (r.opp_cards?.length ? JSON.stringify(r.opp_cards.map(c=>c.key).sort()) : "无主将资料／不适用")
+      : (r.start_time ? localDay(new Date(r.start_time)) : "日期未知");
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(r);
+  }
+  $("#t-m tbody").innerHTML = [...grouped].map(([key, rows]) =>
+    `<tr><td colspan="9"><strong>${mode === "event" ? eventMarkup(rows[0].event_id, rows[0].event_label) : mode === "commander" ? cardsMarkup(rows[0].opp_cards, rows[0].opp_cmdrs) : esc(key)}</strong> · 当前显示 ${rows.length} 场</td></tr>`
+    + rows.map(matchRow).join("")).join("");
+}
+
+let dailyRequest = 0, dailyScope = "", dailyLatest = null;
+async function loadDaily() {
+  const request = ++dailyRequest;
+  const scope = `${params()}|${$("daily-date").value}`;
+  if (dailyScope !== scope) {
+    $("daily-evidence").hidden = true;
+    $("daily-evidence").open = false;
+    $("daily-latest").hidden = true;
+    $("daily-plain").textContent = "正在读取本地战报…";
+    for (const id of ["daily-summary", "daily-events", "daily-quality", "daily-asof", "daily-pd-streaks"]) $(id).textContent = "";
+  }
+  dailyScope = scope;
+  const extra = $("daily-date").value ? {day:$("daily-date").value} : {};
+  let r;
+  try { r = await api("/api/daily", extra); }
+  catch (error) {
+    if (request === dailyRequest && scope === `${params()}|${$("daily-date").value}`) {
+      $("daily-plain").textContent = "战报读取失败，请重试。";
+      $("daily-evidence").hidden = true;
+      $("daily-latest").hidden = true;
+    }
+    return;
+  }
+  if (request !== dailyRequest || scope !== `${params()}|${$("daily-date").value}`) return;
+  const s = r.summary;
+  $("daily-date").value = r.date;
+  dailyScope = `${params()}|${r.date}`;
+  dailyLatest = r.latest_date;
+  $("daily-latest").hidden = s.n > 0 || !dailyLatest;
+  $("daily-evidence").hidden = !(r.highlights || []).length;
+  $("daily-evidence-body").innerHTML = (r.highlights || []).map(f => {
+    const ids = new Set(f.match_ids);
+    const rows = (r.highlight_records || []).filter(x => ids.has(x.match_id));
+    return `<p><strong>${esc(f.text)}</strong></p><p class="ci">${esc(r.date)} · 当前筛选 · 相关记录 ${f.n} 场／所述范围 ${f.denominator} 场；先后手为首局口径。</p>`
+      + rows.map(x => `<p>${fmtTime(x.start_time)} · ${esc(x.my_deck_tag || "套牌未记录")} · ${eventMarkup(x.event_id, x.event_label)} · ${{play:"先手",draw:"后手"}[x.play_draw] || "先后手未记录"} · ${{win:"胜",loss:"负"}[x.my_result] || "结果待确认"}${x.commander_names.length ? ` · ${cardsMarkup(x.commander_cards, x.commander_names)}` : ""}</p>`).join("");
+  }).join("");
+  $("daily-asof").textContent = r.is_today ? "截至目前的已记录对局" : "历史日战报";
+  $("daily-plain").textContent = r.plain;
+  const pd = r.play_draw;
+  $("daily-summary").innerHTML = `<div class="card"><h2>当天胜率</h2><div class="big">${s.win_rate.wr ?? "–"}%</div><div class="ci">${s.wins} 胜 ${s.losses} 负 · ${s.win_rate.n} 场有胜负</div></div>
+    <div class="card"><h2>当天先手率</h2><div class="big">${pd?.day.play_rate ?? "–"}%</div><div class="ci">先手 ${s.play} 场 · 后手 ${s.draw} 场</div></div>
+    <div class="card"><h2>当天后手率</h2><div class="big">${pd?.day.draw_rate ?? "–"}%</div><div class="ci">${s.play_rate.n} 场先后手已知 · 未知 ${s.unknown_pd} 场</div></div>`;
+  if (pd) {
+    const d = pd.day_streaks, h = pd.history_streaks;
+    const current = h.current_side ? `连续${h.current_side === "play" ? "先手" : "后手"} ${h.current_n} 场` : (h.reason || "无记录");
+    $("daily-pd-streaks").innerHTML = `<p><strong>当天最长</strong>：连续先手 ${d.longest_play ?? "–"} 场 · 连续后手 ${d.longest_draw ?? "–"} 场</p>
+      <p><strong>截至所选日期的当前连续</strong>：${esc(current)}${h.last_time ? ` · 末场 ${fmtTime(h.last_time)}` : ""}</p>
+      <p class="ci">截至所选日期的历史最长：先手 ${h.longest_play ?? "–"} 场 · 后手 ${h.longest_draw ?? "–"} 场。当前筛选内、按比赛首局统计；未知先后手或同时间记录打断连续段。${h.reason && h.longest_play == null ? esc(h.reason)+"。" : ""}</p>`;
+  }
+  $("daily-events").innerHTML = r.events.map(e => `<p><strong>${eventMarkup(e.event, e.label)}</strong> · ${e.n} 场 · ${e.wins} 胜 ${e.losses} 负 · 先手 ${e.play} / 后手 ${e.draw} / 未知 ${e.unknown_pd}</p>`).join("")
+    + (s.top_commanders.length ? `<p>常遇主将：${s.top_commanders.map(c => `${cardMarkup(c)} ${c.n} 场`).join("、")}</p>` : "")
+    + (r.modes || []).map(m => `<p>${esc(m.mode)}：${m.n} 场 · ${m.wins} 胜 ${m.losses} 负（整场胜负，首局先后手）</p>`).join("")
+    + (r.opponent_types?.total ? `<p>非主将赛事对手类型资料：${r.opponent_types.known}/${r.opponent_types.total} 场。${Object.entries(r.opponent_types.rows).map(([k,v]) => `${esc(k)} ${v} 场`).join("、") || "尚无已标注类型，不推测对手构筑。"}</p>` : "")
+    + (r.comparison ? `<h3>与此前战绩比较</h3><p>${esc(r.comparison.baseline_window)} · 可比 ${r.comparison.covered}/${r.comparison.total_decided} 场</p>`
+       + r.comparison.groups.map(g => `<p><strong>${eventMarkup(g.event, g.label)} · ${esc(g.mode)}</strong>${g.deck ? ` · ${esc(g.deck)}` : ""}<br>当天 ${g.current.wr ?? "–"}%（${g.current.n} 场），此前 ${g.baseline.wr ?? "–"}%（${g.baseline.n} 场）。${g.usable ? `相差 ${g.delta_pp > 0 ? "+" : ""}${g.delta_pp} 个百分点。` : ""}${esc(g.reason)}${g.small_sample ? "；当天小样本，仅描述。" : "。"}</p>`).join("") + `<p class="ci">${esc(r.comparison.note)}</p>` : "");
+  $("daily-quality").textContent = `资料覆盖：调度 ${s.mulligan_known}/${s.n} · 套牌 ${s.deck_known}/${s.n} · 主将赛制对手主将 ${s.commander_known}/${s.commander_eligible}。${r.unknown_date ? `另有 ${r.unknown_date} 场日期未知，未分配到具体日期。` : ""}`;
 }
 
 function fillSelect(sel, list) {
@@ -291,6 +407,7 @@ function fillSelect(sel, list) {
   for (const it of list) {
     const op = document.createElement("option");
     op.value = it.value;
+    if (sel === "f-event") op.title = it.value;
     op.textContent = `${it.label}（${it.n}）`;
     el.appendChild(op);
   }
@@ -302,6 +419,7 @@ async function loadFilters() {
   const f = await api("/api/filters");
   fillSelect("f-family", f.families || []);
   fillSelect("f-event", f.events);
+  $("event-name-list").innerHTML = f.events.map(e => `<p>${esc(e.label)}<br><code>${esc(e.value)}</code></p>`).join("") || "当前范围无赛事";
   fillSelect("f-deck", f.decks);
 }
 
@@ -377,7 +495,7 @@ async function loadStatus() {
   try {
     const s = await api("/api/status");
     $("watch-dot").className = "dot" + (s.watching ? " ok" : "");
-    $("watch-txt").textContent = s.watching
+    $("watch-txt").textContent = s.last_error ? `解析待重试：${s.last_error}` : s.watching
       ? `监听中 · 库内 ${s.db.matches} 场`
       : `监听未启用 · 库内 ${s.db.matches} 场`;
   } catch {
@@ -388,7 +506,7 @@ async function loadStatus() {
 async function reload() {
   await Promise.all([
     loadOverview(), loadMulligans(), loadCommanders(), loadMatches(), loadStatus(),
-    loadRankCurve(), loadTargeting(),
+    loadRankCurve(), loadTargeting(), loadDaily(),
   ]);
 }
 
@@ -403,37 +521,19 @@ function dimVerdictColor(v) {
 }
 
 function dimBar(d) {
-  if (!d.enough) {
-    return `<div class="dim dim-off">
-      <div class="dim-head">
-        <span class="dim-name">${d.label}</span>
-        <span class="dim-badge">样本不足</span>
-        <div class="bar-track"><div class="bar-fill" style="width:0"></div></div>
-        <span class="dim-score">–</span>
-      </div>
-      <div class="dim-plain">目前只有 ${d.n} 场样本，不足 ${d.min_sample} 场，暂不评分。</div>
-    </div>`;
-  }
-  const score = Math.round(d.score ?? 50);
-  const v = d.verdict || "正常";
-  const col = dimVerdictColor(v);
-  return `<div class="dim">
-    <div class="dim-head" title="统计检验 p 值 = ${d.p}（越小越不寻常）">
-      <span class="dim-name">${d.label}</span>
-      <span class="dim-badge" style="color:${col};border-color:${col}">${v}</span>
-      <div class="bar-track"><div class="bar-fill" style="width:${score}%;background:${col}"></div></div>
-      <span class="dim-score" style="color:${col}">${score}</span>
-    </div>
-    <div class="dim-plain">${d.plain || ""}</div>
-  </div>`;
+  return `<div class="dim"><div class="dim-head"><strong>${esc(d.label)}</strong>
+    <span class="tag">${esc(d.verdict || "仅记录／资料不足")}</span>
+    ${d.enough ? `<span class="ci">p=${Number(d.p).toPrecision(3)} · ${d.n} 场</span>` : ""}</div>
+    <div class="dim-plain">${esc(d.plain)}</div></div>`;
 }
 
 async function loadTargeting() {
   const r = await api("/api/targeting", { window: tiWindow });
   const sc = $("ti-score"), lb = $("ti-label");
   if (r.composite == null) {
-    sc.textContent = "–";
-    lb.textContent = "样本不足，暂不计分";
+    sc.textContent = "分项观察";
+    sc.style.fontSize = "20px";
+    lb.textContent = "以资料覆盖和具体偏差为准";
   } else {
     sc.textContent = r.composite;
     const nEnough = Object.values(r.dimensions).filter((d) => d.enough).length;
@@ -441,10 +541,11 @@ async function loadTargeting() {
     sc.style.color = r.composite >= 85 ? "var(--win)"
       : r.composite >= 70 ? "var(--warn)" : "var(--text)";
   }
-  $("ti-dims").innerHTML = Object.values(r.dimensions).map(dimBar).join("");
+  $("ti-dims").innerHTML = Object.entries(r.dimensions).filter(([key]) => key !== "matchup" || r.summary.commander_eligible > 0).map(([,value]) => dimBar(value)).join("")
+    + (r.comparison ? `<p>同范围历史战绩：可比 ${r.comparison.covered}/${r.comparison.total_decided} 场${r.comparison.adjusted_delta_pp == null ? "；暂无足够基线。" : `；较按当前构成加权的此前胜率相差 ${r.comparison.adjusted_delta_pp} 个百分点。`}</p>` : "");
   const nem = $("ti-nemeses");
   if (r.nemeses && r.nemeses.length) {
-    nem.innerHTML = "克星预警：" + r.nemeses.map(
+    nem.textContent = "近期低胜率对手（小样本记录）：" + r.nemeses.map(
       (x) => `${x.name}（${x.archetype} ${x.n} 场 ${x.wr}%）`).join("、");
   } else {
     nem.textContent = "";
@@ -455,16 +556,13 @@ async function loadTargeting() {
 // 三级级联：赛制大类 → 赛事 → 套牌
 // 赛制/赛事变化 → 重建下拉列表 + 刷新数据；套牌变化 → 只刷新数据
 async function onFilterChange() {
+  matchOffset = 0;
   await loadFilters();
   await reload();
 }
-$("f-family").addEventListener("change", onFilterChange);
-$("f-event").addEventListener("change", onFilterChange);
-$("f-deck").addEventListener("change", reload);
-$("f-abn").addEventListener("click", async () => {
-  $("f-abn").classList.toggle("on");
-  await onFilterChange();
-});
+$("f-family").addEventListener("change", () => {$("f-event").value="";$("f-deck").value="";onFilterChange();});
+$("f-event").addEventListener("change", () => {$("f-deck").value="";onFilterChange();});
+$("f-deck").addEventListener("change", () => {matchOffset=0;reload();});
 $("f-bot").addEventListener("click", async () => {
   $("f-bot").classList.toggle("on");
   await onFilterChange();
@@ -486,4 +584,13 @@ loadFilters().then(reload).catch((e) => {
     `<div class="card" style="border-color:#c94a3d">加载失败：${e.message}<pre style="white-space:pre-wrap;font-size:11px">${e.stack || ""}</pre></div>`
   );
 });
-setInterval(loadStatus, 5000);
+$("daily-date").addEventListener("change", loadDaily);
+$("daily-latest").addEventListener("click", () => {if(dailyLatest) {$("daily-date").value=dailyLatest;loadDaily();}});
+$("daily-today").addEventListener("click", () => {$("daily-date").value=localDay(new Date());loadDaily();});
+$("daily-yesterday").addEventListener("click", () => {const d=new Date();d.setDate(d.getDate()-1);$("daily-date").value=localDay(d);loadDaily();});
+$("daily-matches").addEventListener("click", () => {matchDay=$("daily-date").value;matchOffset=0;loadMatches();});
+$("m-all").addEventListener("click", () => {matchDay="";matchOffset=0;loadMatches();});
+$("m-group").addEventListener("change", loadMatches);
+$("m-more").addEventListener("click", () => {matchOffset+=matchLimit;loadMatches();});
+$("m-prev").addEventListener("click", () => {matchOffset=Math.max(0,matchOffset-matchLimit);loadMatches();});
+setInterval(() => {loadStatus(); if(!document.hidden) reload().catch(() => {});}, 15000);

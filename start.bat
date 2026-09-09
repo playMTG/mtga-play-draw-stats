@@ -37,11 +37,12 @@ curl -s -o nul %URL%/api/status && (
 rem 后台最小化启动服务，等就绪后自动打开浏览器
 echo 正在启动面板服务...
 start "MTGA Panel" /min "%PY%" -m app.main
-for /l %%i in (1,1,30) do (
+rem 等候上限放宽到 90 秒：历史日志累积较多时，启动后的回填需要更久
+for /l %%i in (1,1,90) do (
   curl -s -o nul %URL%/api/status && goto :open
   timeout /t 1 /nobreak >nul
 )
-echo 启动失败，请查看 data 目录下的日志
+echo 90 秒内服务仍未就绪，请查看 data 目录下的日志
 pause
 exit /b 1
 

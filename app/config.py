@@ -13,6 +13,7 @@ DEFAULTS: dict = {
     "port": 8765,
     "db_path": "data/mtga_stats.db",
     "watch_on_start": True,
+    "card_sync_enabled": False,  # 可选联网查卡名；默认只使用已有本地缓存
     "log_paths": {
         "player_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player.log",
         "prev_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player-prev.log",

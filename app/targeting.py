@@ -121,11 +121,15 @@ def streak_sf(streak: int, n: int, win_rate: float) -> float:
     """
     if streak <= 1 or n <= 0:
         return 1.0
+    if streak > n:
+        return 0.0
+    if win_rate <= 0:
+        return 1.0
     q = 1.0 - win_rate
     if q <= 0:
         return 0.0
-    expected = n * win_rate * (q ** streak)
-    return 1.0 - math.exp(-expected)
+    expected = (1 + (n - streak) * win_rate) * (q ** streak)
+    return -math.expm1(-expected)
 
 
 # ---------- p 值 → 0-100 指数 ----------

@@ -179,12 +179,12 @@ def test_upsert_idempotent(tmp_path):
     conn.close()
 
 
-def test_zero_turn_match_is_abnormal(tmp_path):
-    """对手秒退（没有任何 GRE 回合）→ 异常局；有回合的速胜 → 正常。"""
+def test_zero_turn_match_counts_normally(tmp_path):
+    """2026-09-07 口径：秒退/投降是正常结果 → 0 回合局也照常计分，不标异常。"""
     cfg = _cfg(tmp_path)
     conn = connect(cfg.db_path)
 
-    # 0 回合：开局后对手直接离开，GRE 从未到来
+    # 0 回合：开局后对手直接离开，GRE 从未到来 → 正常计分
     sb = SessionBuilder(source="log", my_player_id=fx.ME)
     for t in (fx.match_start("m-zero"), fx.final_result(winner_match=1),
               fx.match_completed()):
@@ -194,7 +194,7 @@ def test_zero_turn_match_is_abnormal(tmp_path):
     r = conn.execute(
         "SELECT is_abnormal, abnormal_reason FROM matches WHERE match_id='m-zero'"
     ).fetchone()
-    assert r["is_abnormal"] == 1 and r["abnormal_reason"] == "no_game"
+    assert r["is_abnormal"] == 0 and r["abnormal_reason"] is None
 
     # 有回合的短局（对手 2 回合投降）→ 正常局，胜负计入
     sb = SessionBuilder(source="log", my_player_id=fx.ME)
@@ -206,4 +206,17 @@ def test_zero_turn_match_is_abnormal(tmp_path):
         "SELECT is_abnormal FROM matches WHERE match_id='m-short'"
     ).fetchone()
     assert r["is_abnormal"] == 0
+
+    # 历史库迁移：旧 no_game 标记在 connect() 时被清除
+    conn.execute(
+        "UPDATE matches SET is_abnormal=1, abnormal_reason='no_game' "
+        "WHERE match_id='m-short'"
+    )
+    conn.commit()
+    conn2 = connect(cfg.db_path)
+    r = conn2.execute(
+        "SELECT is_abnormal, abnormal_reason FROM matches WHERE match_id='m-short'"
+    ).fetchone()
+    assert r["is_abnormal"] == 0 and r["abnormal_reason"] is None
     conn.close()
+    conn2.close()

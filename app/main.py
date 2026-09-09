@@ -12,7 +12,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import FileResponse, Response
 
 from . import store, stats
@@ -89,13 +89,16 @@ def _watch_loop() -> None:
                     got += 1
             except OSError:
                 continue  # 文件暂时不可读（滚动中），下轮重试
-        if got:
+        if got or pending_matches or pending_ranks:
             _state["last_events"] = _state.get("last_events", 0) + got
             try:
                 with _db_lock:
                     flush()
-            except Exception:
-                pass  # 单轮失败（如 DB busy）不杀线程，pending 下轮重试
+                _state["last_success_at"] = int(time.time()*1000)
+                _state["last_error"] = None
+            except Exception as exc:
+                conn.rollback()
+                _state["last_error"] = type(exc).__name__
         time.sleep(2)
 
 
@@ -120,12 +123,17 @@ def _cards_sync_loop() -> None:
         time.sleep(300)
 
 
-@app.on_event("startup")
-def on_startup() -> None:
-    # 启动回填（幂等）：三个日志来源；服务端随后单独持一条连接
+def _boot_tasks() -> None:
+    """启动期的重活：归档会话日志 → 全量回填 → Bot 打标（全部幂等）。
+
+    必须放在后台线程：历史日志累积到几百 MB 后全量解析要几十秒，阻塞在
+    startup 里会让 uvicorn 迟迟不接受连接，外部健康探测（start.bat）会在
+    服务其实正常的情况下误判为「启动失败」。
+    """
     from .backfill import backfill, collect_sources
     from .archive import archive_session_logs
 
+    _state["booting"] = True
     try:
         archived = archive_session_logs(cfg)  # P0：先归档防丢（客户端会清旧日志）
         if archived:
@@ -136,18 +144,26 @@ def on_startup() -> None:
         backfill(cfg, collect_sources(cfg))
     except Exception:
         pass  # 回填失败不阻塞面板启动（库中已有数据仍可看）
-    conn = get_conn()
     # Bot 套牌打标（按 config 套牌名模式，幂等）
     try:
-        store.tag_bot_decks(conn, cfg.get("bot_deck_patterns") or [])
+        store.tag_bot_decks(get_conn(), cfg.get("bot_deck_patterns") or [])
     except Exception:
         pass
+    _state["booting"] = False
+    # 回填完再挂监听，保持与旧版一致的先后顺序（避免与回填并发写库）
     if cfg.get("watch_on_start", True):
         t = threading.Thread(target=_watch_loop, daemon=True)
         t.start()
         _state["watching"] = True
-    t2 = threading.Thread(target=_cards_sync_loop, daemon=True)
-    t2.start()
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    # 先让 HTTP 服务立即可用，重活交给后台线程
+    threading.Thread(target=_boot_tasks, daemon=True).start()
+    if cfg.get("card_sync_enabled", False):
+        t2 = threading.Thread(target=_cards_sync_loop, daemon=True)
+        t2.start()
 
 
 @app.on_event("shutdown")
@@ -175,16 +191,20 @@ def api_overview(exclude_abnormal: bool = True, exclude_bot: bool = True,
 @app.get("/api/matches")
 def api_matches(exclude_abnormal: bool = True, exclude_bot: bool = True,
                 event: str | None = None,
-                deck: str | None = None, limit: int = 200, offset: int = 0,
-                family: str | None = None):
-    return q(stats.match_list, exclude_abnormal, event, deck,
-             min(limit, 1000), offset, cfg.get("card_name_lang", "zh"),
-             exclude_bot, family=family)
+                deck: str | None = None, limit: int = Query(200, ge=1, le=1000), offset: int = Query(0, ge=0),
+                family: str | None = None, day: str | None = None):
+    try:
+        return q(stats.match_list, exclude_abnormal, event, deck,
+                 limit, offset, cfg.get("card_name_lang", "zh"),
+                 exclude_bot, family=family, day=day)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 
 
 @app.get("/api/mulligans")
-def api_mulligans(exclude_abnormal: bool = True, exclude_bot: bool = True):
-    return q(stats.mulligan_stats, exclude_abnormal, exclude_bot)
+def api_mulligans(exclude_abnormal: bool = True, exclude_bot: bool = True,
+                  event: str | None = None, deck: str | None = None, family: str | None = None):
+    return q(stats.mulligan_stats, exclude_abnormal, exclude_bot, event, deck, family)
 
 
 @app.get("/api/commanders")
@@ -243,21 +263,36 @@ def api_filters(exclude_abnormal: bool = True, exclude_bot: bool = True,
 
 @app.get("/api/targeting")
 def api_targeting(window: str = "30", exclude_abnormal: bool = True,
-                  exclude_bot: bool = True):
+                  exclude_bot: bool = True, event: str | None = None,
+                  deck: str | None = None, family: str | None = None):
     """被针对指数（§3.5）。window: 7 | 30 | all。"""
     days = None if window == "all" else (
         7 if window == "7" else 30)
     def _calc(conn):
         return stats.targeting_index(conn, cfg, days, exclude_abnormal,
-                                     exclude_bot, root=cfg.root)
+                                     exclude_bot, root=cfg.root, event=event, deck=deck, family=family)
     return q(_calc)
+
+
+@app.get("/api/daily")
+def api_daily(day: str | None = None, exclude_abnormal: bool = True,
+              exclude_bot: bool = True, event: str | None = None,
+              deck: str | None = None, family: str | None = None):
+    from .insights import daily_report
+    try:
+        return q(daily_report, day, exclude_abnormal, exclude_bot, event, deck, family)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 
 
 @app.get("/api/status")
 def api_status():
     def _get(conn):
         return {"db": store.stats(conn), "watching": _state["watching"],
-                "last_events": _state["last_events"], "port": cfg.port}
+                "booting": _state.get("booting", False),
+                "last_events": _state["last_events"], "port": cfg.port,
+                "last_success_at": _state.get("last_success_at"),
+                "last_error": _state.get("last_error")}
     return q(_get)
 
 
@@ -276,13 +311,21 @@ def api_opp_tag_by_name(commander: str = Query(...), tag: str = Query("")):
             args = (commander,)
         if tag and tag not in stats.ARCH_KEYS:
             return {"ok": False, "error": f"非法类型：{tag}"}
+        profile_key = commander
+        if commander.startswith("grpId:"):
+            try:
+                row = conn.execute("SELECT name FROM cards_db.cards WHERE grp_id=?", (gid,)).fetchone()
+                if row and row["name"]:
+                    profile_key = row["name"]
+            except sqlite3.OperationalError:
+                pass
         conn.execute(
             """INSERT INTO opponent_profiles(commander_name, archetype_user, updated_at)
                VALUES(?,?,strftime('%s','now'))
                ON CONFLICT(commander_name) DO UPDATE SET
                  archetype_user=excluded.archetype_user,
                  updated_at=excluded.updated_at""",
-            (commander, tag or None),
+            (profile_key, tag or None),
         )
         try:
             conn.execute(
@@ -363,12 +406,13 @@ def api_opp_tag(match_id: str = Query(...), tag: str = Query("")):
 
 @app.get("/")
 def index():
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/app.js")
 def app_js():
-    return FileResponse(WEB_DIR / "app.js", media_type="text/javascript")
+    return FileResponse(WEB_DIR / "app.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/chart.umd.js")

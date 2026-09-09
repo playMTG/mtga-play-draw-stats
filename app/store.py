@@ -70,6 +70,8 @@ def connect(db_path: Path, cards_db_path: Path | None = None) -> sqlite3.Connect
     # check_same_thread=False：FastAPI 端点跑在线程池，连接跨线程共用（配合 main.py 的全局锁）
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # 回填/监听线程与 API 会并发写库，等锁时间放宽到 15 秒（默认 5 秒偏紧）
+    conn.execute("PRAGMA busy_timeout=15000")
     conn.executescript(_SCHEMA)
     _migrate(conn)
     # 挂载卡名库（grpId→卡名），缺失时优雅降级为仅 grpId
@@ -98,9 +100,19 @@ def connect(db_path: Path, cards_db_path: Path | None = None) -> sqlite3.Connect
 def _migrate(conn: sqlite3.Connection) -> None:
     """旧库幂等迁移：is_bot 列（Bot 刷分局标记）、调度 seat 回填。"""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
+    for col in ("my_deck_id", "my_deck_version"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE matches ADD COLUMN {col} TEXT")
     if "is_bot" not in cols:
         conn.execute("ALTER TABLE matches ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+    # 2026-09-07 口径变更：投降/秒退/速胜都是正常结果，历史异常标记（no_game、
+    # short_duration 等旧规则产物）全部清除；异常判定已废弃，仅保留 is_bot
+    conn.execute(
+        "UPDATE matches SET is_abnormal = 0, abnormal_reason = NULL "
+        "WHERE is_abnormal = 1 OR abnormal_reason IS NOT NULL"
+    )
+    conn.commit()
     # 调度记录迁移：kept_on IS NULL 的行是 2026-09-06 前的旧解析产物
     # （decision 未解析、kept_on 全空、Keep/Mulligan 混杂不可区分），直接废弃，
     # 由回填按新 decision 语义重新生成
@@ -132,14 +144,12 @@ def tag_bot_decks(conn: sqlite3.Connection, patterns: list[str]) -> int:
 
 
 def _abnormal_flags(duration, total_turns, cfg: Config) -> tuple[int, str | None]:
-    """异常局 = 没真正打起来的局：回合数据为 0/缺失（对手秒退，GRE 未到）。
+    """投降/秒退都是玩家主动做出的正常结果，一律照常计分（2026-09-07 定稿）。
 
-    短时长但回合数 > 0 的对局是真实胜负（争锋里对手提前投降很常见，
-    且计入游戏内胜场进度），照常计分 —— “打得快”≠“没打”。
-    旧规则（时长/回合阈值）会把速胜误判成异常并从默认视图隐藏。
+    曾经的规则先后用过"时长/回合阈值"和"0 回合 = no_game"，都会把真实的
+    秒退/投降对局（计入游戏内胜场进度）误判为异常并从默认视图隐藏。
+    现已彻底废弃异常判定：is_abnormal 恒为 0，仅保留 is_bot 排除 Bot 刷分局。
     """
-    if total_turns is None or total_turns <= 0:
-        return (1, "no_game")
     return (0, None)
 
 
@@ -185,18 +195,30 @@ def upsert_match(conn: sqlite3.Connection, m: MatchRecord, cfg: Config) -> bool:
         ),
     )
 
-    if not is_new:
-        # 子表重写（幂等）
-        for table in ("games", "mulligans", "commanders"):
-            conn.execute(f"DELETE FROM {table} WHERE match_id=?", (m.match_id,))
-
+    conn.execute("UPDATE matches SET my_deck_id=COALESCE(?,my_deck_id), "
+                 "my_deck_version=COALESCE(?,my_deck_version) WHERE match_id=?",
+                 (m.my_deck_id, m.my_deck_version, m.match_id))
     mid = m.match_id
     for g in m.games:
+        old = conn.execute("SELECT id FROM games WHERE match_id=? AND game_no=?",
+                           (mid, g.game_no)).fetchone()
+        if old:
+            conn.execute("UPDATE games SET result=COALESCE(?,result), reason=COALESCE(?,reason), "
+                         "play_draw=COALESCE(?,play_draw) WHERE id=?",
+                         (g.result, g.reason, g.play_draw, old["id"]))
+            continue
         conn.execute(
             "INSERT INTO games(match_id, game_no, result, reason, play_draw) VALUES(?,?,?,?,?)",
             (mid, g.game_no, g.result, g.reason, g.play_draw),
         )
     for mu in m.mulligans:
+        seat = mu["seat"] if mu["seat"] is not None else m.my_seat
+        old = conn.execute("SELECT id FROM mulligans WHERE match_id=? AND game_no IS ? "
+                           "AND seat IS ?", (mid, mu["game_no"], seat)).fetchone()
+        if old:
+            conn.execute("UPDATE mulligans SET kept_on=MAX(COALESCE(kept_on,0),?) WHERE id=?",
+                         (mu["kept_on"], old["id"]))
+            continue
         # seat 缺失（MulliganResp 无 playerSeatId）时填 my_seat：
         # 该事件是本地客户端日志，只会记录我方调度
         conn.execute(
@@ -206,6 +228,9 @@ def upsert_match(conn: sqlite3.Connection, m: MatchRecord, cfg: Config) -> bool:
              mu["kept_on"]),
         )
     for c in m.commanders:
+        if conn.execute("SELECT 1 FROM commanders WHERE match_id=? AND seat IS ? AND grp_id=?",
+                        (mid, c["seat"], str(c["grp_id"]))).fetchone():
+            continue
         conn.execute(
             "INSERT INTO commanders(match_id, seat, grp_id, partner_idx) VALUES(?,?,?,?)",
             (mid, c["seat"], c["grp_id"], c["partner_idx"]),

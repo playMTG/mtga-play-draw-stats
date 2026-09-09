@@ -9,7 +9,7 @@
 - match_id = ut_{ts}_{deck_id}_{on_play}（稳定伪 ID，重跑不重复）
 - play_draw = on_play(1/0) → play/draw；my_result = win(1/0) → win/loss
 - total_turns 不可得（置 0）；异常判定自动只按时长规则生效
-- 对手主将 grpId 不可得 → 不写 commanders 表，主将档案面板不受影响
+- 此简化 JSONL 不含主将；原始 raw_b*.json 的 deckstring 可用 tools.enrich_untapped 补全
 
 用法：python -m tools.import_untapped [--dry-run]
 """
@@ -20,7 +20,6 @@ import json
 import sys
 from pathlib import Path
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 from app.config import load_config
 from app.events import MatchRecord
@@ -46,8 +45,8 @@ def row_to_record(r: dict) -> MatchRecord:
         event_id=r.get("event") or None,
         start_ms=ts,
         end_ms=ts + dur * 1000 if dur else None,
-        play_draw="play" if r.get("on_play") == 1 else "draw",
-        my_result="win" if r.get("win") == 1 else "loss",
+        play_draw={1: "play", 0: "draw"}.get(r.get("on_play")),
+        my_result={1: "win", 0: "loss"}.get(r.get("win")),
         my_deck_tag=r.get("deck") or None,
     )
 

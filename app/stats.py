@@ -14,6 +14,9 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from .event_names import friendly_event
+from .card_names import CardNames
+
 from .targeting import (binom_cdf, binom_sf, chi2_sf, luck_label,
                         max_loss_streak, p_to_score, streak_sf)
 
@@ -106,11 +109,22 @@ def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
              exclude_bot: bool = True, family: str | None = None) -> dict:
     """总览：整体与先后手拆分 + 按赛事/套牌分组 + 趋势（按日）。"""
     conds, args = _filters(conn, event, deck, family)
+    stat_conds = list(conds)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
     if exclude_bot:
         conds.append("is_bot = 0")
     where = " AND ".join([_BASE_WHERE] + conds)
+
+    # 被排除场次（异常/Bot）：仅统计因这两个开关而被隐藏的场次，用于前端提示
+    hidden = 0
+    if exclude_abnormal or exclude_bot:
+        hwhere = " AND ".join(
+            [_BASE_WHERE] + stat_conds + ["(is_abnormal = 1 OR is_bot = 1)"]
+        )
+        hidden = conn.execute(
+            f"SELECT COUNT(*) FROM matches WHERE {hwhere}", args
+        ).fetchone()[0]
 
     total = conn.execute(
         f"SELECT SUM(my_result='win') w, COUNT(*) n FROM matches WHERE {where}",
@@ -158,11 +172,16 @@ def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         args,
     ).fetchall()
 
+    pn, dn = (play['n'] if play else 0), (draw['n'] if draw else 0)
     return {
+        "play_draw_rates": {'play': pn, 'draw': dn, 'unknown': total['n']-pn-dn,
+                            'play_rate': round(100*pn/(pn+dn),1) if pn+dn else None,
+                            'draw_rate': round(100*dn/(pn+dn),1) if pn+dn else None},
         "total": wr(total["w"] or 0, total["n"]),
+        "hidden": hidden,
         "on_play": wr(play["w"], play["n"]) if play else wr(0, 0),
         "on_draw": wr(draw["w"], draw["n"]) if draw else wr(0, 0),
-        "by_event": [{"key": r["k"], **wr(r["w"] or 0, r["n"])} for r in by_event],
+        "by_event": [{"key": r["k"], "label": friendly_event(r["k"]), **wr(r["w"] or 0, r["n"])} for r in by_event],
         "by_deck": [{"key": r["k"], **wr(r["w"] or 0, r["n"])} for r in by_deck],
         "trend_daily": [{"key": r["d"], **wr(r["w"] or 0, r["n"])} for r in trend],
         "trend_weekly": [{"key": r["wk"], **wr(r["w"] or 0, r["n"])} for r in trend_w],
@@ -246,6 +265,7 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                 if has_cards else "")
     rows = conn.execute(
         f"""SELECT c.grp_id k,
+               {('cards.name' if has_cards else 'NULL')} canonical_name,
                {name_expr} name,
                SUM(m.my_result='win') w, COUNT(DISTINCT m.match_id) n,
                SUM(CASE WHEN m.play_draw='play' THEN 1 ELSE 0 END) pn,
@@ -260,11 +280,12 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         args,
     ).fetchall()
     arch = archetype_map(conn, root) if root else {}
+    names = CardNames(conn, lang, root)
     return [
         {
             "key": r["k"],
-            "name": r["name"],
-            "archetype": arch.get(r["name"]),
+            **names.get(r["k"]),
+            "archetype": arch.get(r["canonical_name"]) or arch.get('grpId:' + str(r['k'])) or arch.get(r["name"]),
             **wr(r["w"] or 0, r["n"]),
             "on_play": wr(r["pw"] or 0, r["pn"]),
             "on_draw": wr(r["dw"] or 0, r["dn"]),
@@ -296,15 +317,26 @@ def commander_coverage(conn: sqlite3.Connection, exclude_abnormal: bool = True,
             FROM matches m WHERE {where}""",
         args,
     ).fetchone()
-    return {"total": row["total"] or 0, "with_cmdr": row["with_cmdr"] or 0}
+    from .insights import records
+    eligible = [r for r in records(conn, exclude_abnormal, exclude_bot, event, deck, family)
+                if 'Brawl' in (r['event_id'] or '') and r['my_result'] is not None]
+    known = [r for r in eligible if r['commanders']]
+    dates = [ts_to_local_str(r['start_time']) for r in known if r['start_time']]
+    return {"total": len(eligible), "with_cmdr": len(known),
+            "all_total": row['total'] or 0, "first": dates[0] if dates else None,
+            "last": dates[-1] if dates else None}
 
 
 def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                event: str | None = None, deck: str | None = None,
                limit: int = 500, offset: int = 0, lang: str = "zh",
-               exclude_bot: bool = True, family: str | None = None) -> dict:
-    """对局明细（倒序），含调度次数与对手主将。"""
+               exclude_bot: bool = True, family: str | None = None, day=None) -> dict:
+    """对局明细（倒序），含明确记录的我方／对手主将与诊断字段。"""
     base_conds, base_args = _filters(conn, event, deck, family)
+    if day:
+        datetime.strptime(day, '%Y-%m-%d')
+        base_conds.append("date(start_time/1000,'unixepoch','localtime')=?")
+        base_args.append(day)
     conds = list(base_conds)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
@@ -312,28 +344,22 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         conds.append("is_bot = 0")
     where = " AND ".join(["1=1"] + conds)
 
-    # 卡名库可能未挂载：动态决定对手主将列的显示形式
-    try:
-        conn.execute("SELECT 1 FROM cards_db.cards LIMIT 1")
-        name_base = ("COALESCE(cards.name_zh, cards.name)"
-                     if lang == "zh" else "cards.name")
-        # 分隔符用 ';;'：卡名自带逗号（如 "Ajani, Nacatl Pariah"），默认 ',' 会误切
-        cmdr_expr = f"GROUP_CONCAT(COALESCE({name_base}, 'grpId:' || c.grp_id), ';;')"
-        join_sql = ("LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id")
-    except sqlite3.OperationalError:
-        cmdr_expr = "GROUP_CONCAT('grpId:' || c.grp_id, ';;')"
-        join_sql = ""
+    names = CardNames(conn, lang)
+    cmdr_expr = "GROUP_CONCAT(DISTINCT c.grp_id)"
+    join_sql = ""
 
     rows = conn.execute(
         f"""SELECT m.match_id, m.event_id, m.start_time, m.duration_sec,
                    m.opponent_name, m.play_draw, m.my_result, m.end_reason,
                    m.total_turns, m.is_abnormal, m.abnormal_reason, m.is_bot,
-                   m.my_deck_tag, m.source,
-                   (SELECT COALESCE(SUM(mu.kept_on),0) FROM mulligans mu
+                   m.my_deck_tag, m.my_deck_id, m.my_deck_version, m.source,
+                   (SELECT SUM(mu.kept_on) FROM mulligans mu
                      WHERE mu.match_id=m.match_id
                        AND (mu.seat IS NULL OR mu.seat=m.my_seat)) my_mulls,
                    (SELECT {cmdr_expr} FROM commanders c {join_sql}
                      WHERE c.match_id=m.match_id AND c.seat!=m.my_seat) opp_cmdrs
+                  ,(SELECT {cmdr_expr} FROM commanders c {join_sql}
+                     WHERE c.match_id=m.match_id AND c.seat=m.my_seat) my_cmdrs
             FROM matches m WHERE {where}
             ORDER BY m.start_time DESC LIMIT ? OFFSET ?""",
         [*base_args, limit, offset],
@@ -357,6 +383,7 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
             {
                 "match_id": r["match_id"],
                 "event_id": r["event_id"],
+                "event_label": friendly_event(r["event_id"]),
                 "start_time": r["start_time"],
                 "duration_sec": r["duration_sec"],
                 "opponent_name": r["opponent_name"],
@@ -368,82 +395,22 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                 "abnormal_reason": r["abnormal_reason"],
                 "is_bot": bool(r["is_bot"]),
                 "my_deck_tag": r["my_deck_tag"],
+                "my_deck_id": r["my_deck_id"],
+                "my_deck_version": r["my_deck_version"],
                 "source": r["source"],
                 "my_mulls": r["my_mulls"],
-                "opp_cmdrs": (r["opp_cmdrs"] or "").split(";;") if r["opp_cmdrs"] else [],
+                "my_cards": ([names.get(g) for g in (r["my_cmdrs"] or "").split(",") if g]
+                             if "Brawl" in (r["event_id"] or "") else []),
+                "my_cmdrs": ([names.get(g)["name"] for g in (r["my_cmdrs"] or "").split(",") if g]
+                             if "Brawl" in (r["event_id"] or "") else []),
+                "opp_cards": ([names.get(g) for g in (r["opp_cmdrs"] or "").split(",") if g]
+                              if "Brawl" in (r["event_id"] or "") else []),
+                "opp_cmdrs": ([names.get(g)["name"] for g in (r["opp_cmdrs"] or "").split(",") if g]
+                              if "Brawl" in (r["event_id"] or "") else []),
             }
             for r in rows
         ],
     }
-
-
-_SET_ZH = {
-    "DMU": "多明纳里亚联合", "MOM": "机械降临", "MID": "午夜猎影",
-    "VOW": "猩红婚誓", "NEO": "神河霓朝", "ELD": "艾卓王权",
-    "DSK": "诡墟", "SNC": "新卡佩纳", "MH3": "摩登新篇3", "MH2": "摩登新篇2",
-    "BLB": "边陲亡命", "OTJ": "旷野哨站", "FDN": "基础系列2025",
-    "TDM": "鞑契风暴",
-}
-
-_EVENT_ZH = {
-    "Ladder": "排位天梯",
-    "Traditional_Ladder": "传统排位天梯（双备牌）",
-    "Play": "自由对战（非排位）",
-    "Play_Brawl_Historic": "史迹争锋（非排位）",
-    "Explorer_Ladder": "探险排位天梯",
-    "Traditional_Explorer_Ladder": "传统探险排位天梯",
-    "Explorer_Play": "探险自由对战",
-    "Explorer_Event_v2": "探险构组赛",
-    "Historic_Ladder": "史迹排位天梯",
-    "Timeless_Ladder": "无境排位天梯",
-    "Traditional_Timeless_Ladder": "传统无境排位天梯",
-    "Timeless_Play": "无境自由对战",
-    "Constructed_Event_2022": "构组赛·2022",
-    "Constructed_Event_2022_v2": "构组赛·2022 v2",
-    "Traditional_Cons_Event_2022": "传统构组赛·2022",
-}
-
-_MWM_ZH = {
-    "OmniscienceDraft": "全知轮抽", "Momir": "莫米", "BrawlBuilder": "争锋构筑",
-}
-
-_DRAFT_PREFIX = {
-    "PremierDraft_": "高端轮抽", "QuickDraft_": "快速轮抽",
-    "PickTwoDraft_": "二选一轮抽", "Sealed_": "现开赛",
-}
-
-
-def friendly_event(event_id: str) -> str:
-    """把 MTGA 原始 event_id 转成可读的中文赛制名（未识别原样返回）。"""
-    if event_id in _EVENT_ZH:
-        return _EVENT_ZH[event_id]
-    for prefix, label in _DRAFT_PREFIX.items():
-        if event_id.startswith(prefix):
-            code = event_id[len(prefix):].split("_")[0]
-            return f"{label}·{_SET_ZH.get(code, code)}"
-    if event_id.startswith("MWM_"):
-        tail = event_id[4:]
-        for k, v in _MWM_ZH.items():
-            if tail.startswith(k):
-                return f"每周魔法·{v}"
-        return f"每周魔法·{tail}"
-    if event_id.startswith("Brawl_Challenge"):
-        return f"争锋挑战赛·{event_id.rsplit('_', 1)[-1]}"
-    if event_id.startswith("Festival_"):
-        return f"节日活动·{event_id.split('_')[1]}"
-    if event_id.startswith("Jump_In"):
-        return "跳入魔法"
-    if event_id == "AIBotMatch":
-        return "AI 机器人对局"
-    if event_id.startswith("DirectGameTournament"):
-        return "Direct Game 巡回赛"
-    if event_id.startswith("CompCons"):
-        return "竞技构组挑战赛"
-    if event_id == "Constructed_BestOf3":
-        return "传统构组赛（BO3）"
-    if event_id.startswith("Yargle_Day"):
-        return "亚格勒日"
-    return event_id
 
 
 def filter_options(conn: sqlite3.Connection, exclude_abnormal: bool = True,
@@ -607,30 +574,25 @@ def export_rows(conn: sqlite3.Connection, kind: str = "matches",
     if exclude_bot:
         conds.append("is_bot = 0")
     where = " AND ".join(["1=1"] + conds)
-    # 对手主将列：卡名库挂载时显示卡名（zh 优先），否则 grpId
-    try:
-        conn.execute("SELECT 1 FROM cards_db.cards LIMIT 1")
-        name_base = "COALESCE(cards.name_zh, cards.name)"
-        cmdr_sub = ("(SELECT GROUP_CONCAT(COALESCE(" + name_base +
-                    ", 'grpId:' || c.grp_id), ';;') FROM commanders c "
-                    "LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id "
-                    "WHERE c.match_id=m.match_id AND c.seat!=m.my_seat)")
-    except sqlite3.OperationalError:
-        cmdr_sub = ("(SELECT GROUP_CONCAT('grpId:' || c.grp_id, ';;') FROM commanders c "
-                    "WHERE c.match_id=m.match_id AND c.seat!=m.my_seat)")
+    names = CardNames(conn)
+    my_cmdr_sub = ("(SELECT GROUP_CONCAT(DISTINCT c.grp_id) FROM commanders c "
+                   "WHERE c.match_id=m.match_id AND c.seat=m.my_seat)")
+    cmdr_sub = ("(SELECT GROUP_CONCAT(DISTINCT c.grp_id) FROM commanders c "
+                "WHERE c.match_id=m.match_id AND c.seat!=m.my_seat)")
     rows = conn.execute(
-        f"""SELECT m.*, (SELECT COALESCE(SUM(mu.kept_on),0) FROM mulligans mu
+        f"""SELECT m.*, (SELECT SUM(mu.kept_on) FROM mulligans mu
                  WHERE mu.match_id=m.match_id
                    AND (mu.seat IS NULL OR mu.seat=m.my_seat)) my_mulls,
-                {cmdr_sub} opp_cmdrs
+                {my_cmdr_sub} my_cmdrs, {cmdr_sub} opp_cmdrs
              FROM matches m WHERE {where} ORDER BY m.start_time""",
         args,
     ).fetchall()
     headers = ["match_id", "来源", "赛事", "时间", "时长(秒)", "对手名",
                "先后手", "结果", "结束原因", "总回合", "异常", "异常原因",
-               "我方套牌", "对手类型", "我方调度", "对手主将", "Bot局"]
+               "我方套牌", "我方主将", "对手类型", "我方调度", "对手主将", "Bot局"]
     out = []
     for r in rows:
+        is_brawl = "Brawl" in (r["event_id"] or "")
         out.append([
             r["match_id"], r["source"], r["event_id"] or "",
             ts_to_local_str(r["start_time"]) or "",
@@ -643,18 +605,21 @@ def export_rows(conn: sqlite3.Connection, kind: str = "matches",
             "是" if r["is_abnormal"] else "否",
             r["abnormal_reason"] or "",
             r["my_deck_tag"] or "",
+            (" // ".join(names.get(g)["name"] for g in (r["my_cmdrs"] or "").split(",") if g)
+             if is_brawl else ""),
             r["opp_archetype_tag"] or "",
             r["my_mulls"],
-            r["opp_cmdrs"] or "",
+            (" // ".join(names.get(g)["name"] for g in (r["opp_cmdrs"] or "").split(",") if g)
+             if is_brawl else ""),
             "是" if r["is_bot"] else "否",
         ])
     return headers, out
 
 
 def mulligan_stats(conn: sqlite3.Connection, exclude_abnormal: bool = True,
-                   exclude_bot: bool = True) -> dict:
+                   exclude_bot: bool = True, event=None, deck=None, family=None) -> dict:
     """调度统计：我的每局调度次数分布 + 调度与胜负关联。"""
-    conds = []
+    conds, args = _filters(conn, event, deck, family)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
     if exclude_bot:
@@ -666,16 +631,19 @@ def mulligan_stats(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         f"""SELECT mu.kept_on k, COUNT(*) n FROM mulligans mu
             JOIN matches m ON m.match_id=mu.match_id
             WHERE (mu.seat IS NULL OR mu.seat=m.my_seat) AND {where}
-            GROUP BY k ORDER BY k""",
+            GROUP BY k ORDER BY k""", args,
     ).fetchall()
     # 调过度的局 vs 没调的局胜率（kept_on>=1 = 本局有调度）
     agg = conn.execute(
         f"""SELECT CASE WHEN EXISTS(
                  SELECT 1 FROM mulligans mu WHERE mu.match_id=m.match_id
                    AND (mu.seat IS NULL OR mu.seat=m.my_seat)
-                   AND mu.kept_on >= 1) THEN 'mulligan' ELSE 'clean' END k,
+                   AND mu.kept_on >= 1) THEN 'mulligan'
+                 WHEN EXISTS(SELECT 1 FROM mulligans mu WHERE mu.match_id=m.match_id
+                   AND (mu.seat IS NULL OR mu.seat=m.my_seat) AND mu.kept_on IS NOT NULL)
+                 THEN 'clean' ELSE 'unknown' END k,
                SUM(m.my_result='win') w, COUNT(*) n
-            FROM matches m WHERE {where} GROUP BY k""",
+            FROM matches m WHERE {where} GROUP BY k""", args,
     ).fetchall()
     return {
         "kept_on_dist": [{"kept_on": r["k"], "count": r["n"]} for r in dist],
@@ -738,206 +706,8 @@ def _verdict(score: float | None) -> str | None:
     return "高度可疑"
 
 
-def targeting_index(conn: sqlite3.Connection, cfg=None,
-                    window_days: int | None = 30,
-                    exclude_abnormal: bool = True,
-                    exclude_bot: bool = True,
-                    root=None) -> dict:
-    """被针对指数（DESIGN §3.5）：四维度独立检验 + 合成 0-100。
-
-    window_days: 7/30 = 近 N 天；None = 全部（维度 B 始终用滚动 30 天
-    vs 此前基线，防止长期被针对被历史平均掉）。
-    样本 < min_sample 的维度显示灰色态且不计入综合分。
-    """
-    ti = _ti_cfg(cfg)
-    min_n = int(ti["min_sample"])
-    p_normal = float(ti["p_normal"])
-
-    now_ms = int(datetime.now().timestamp() * 1000)
-    conds = ["my_result IS NOT NULL"]
-    if exclude_abnormal:
-        conds.append("is_abnormal = 0")
-    if exclude_bot:
-        conds.append("is_bot = 0")
-    win_start = None
-    if window_days:
-        win_start = now_ms - window_days * 86_400_000
-    wargs: list = [win_start] if win_start else []
-    base_where = " AND ".join(conds)
-    where = (f"{base_where} AND start_time >= ?") if win_start else base_where
-
-    # ---- A. 先后手运：拿先手比例 vs 50%（单侧：先手偏少=被针对）----
-    r = conn.execute(
-        f"""SELECT SUM(play_draw='play') p, COUNT(*) n FROM matches
-            WHERE {where} AND play_draw IS NOT NULL""", wargs).fetchone()
-    a_plain = ""
-    a_dim = _dim(
-        "先后手运", r["n"], r["p"] or 0, (r["n"] or 0) / 2, 1.0, min_n,
-        f"先手 {r['p'] or 0}/{r['n'] or 0} 场", "期望先手约一半",
-    )
-    if a_dim["n"]:
-        pct = (r["p"] or 0) * 100.0 / r["n"]
-        a_plain = (f"你 {r['n']} 场里有 {r['p'] or 0} 场先手（占 {pct:.1f}%）。"
-                   f"MTGA 理论上先后手各占一半。")
-        a_dim["p"] = round(binom_cdf(int(r["p"] or 0), r["n"], 0.5), 6)
-        if a_dim["enough"]:
-            a_dim["score"] = p_to_score(a_dim["p"], p_normal)
-            a_plain += ("偏差在正常运气范围内。" if a_dim["score"] < 60
-                        else "先手明显偏少，超出了运气波动范围。")
-        a_dim["plain"] = a_plain
-
-    # ---- C. 起手运：调度局占比 vs 基线调度率（单侧：调多了=被针对）----
-    r = conn.execute(
-        f"""SELECT SUM(CASE WHEN EXISTS(SELECT 1 FROM mulligans mu
-                     WHERE mu.match_id=m.match_id
-                       AND (mu.seat IS NULL OR mu.seat=m.my_seat)
-                       AND mu.kept_on >= 1)
-                 THEN 1 ELSE 0 END) mu, COUNT(*) n
-            FROM matches m WHERE {where}""", wargs).fetchone()
-    r0 = float(ti["mulligan_baseline"])
-    c_dim = _dim(
-        "起手运", r["n"], r["mu"] or 0, r0 * r["n"], 1.0, min_n,
-        f"调度局 {r['mu'] or 0}/{r['n'] or 0}",
-        f"基线调度率 {r0:.0%}",
-    )
-    if c_dim["n"]:
-        pct_c = (r["mu"] or 0) * 100.0 / c_dim["n"]
-        c_dim["plain"] = (f"{c_dim['n']} 场里有 {r['mu'] or 0} 场你调度过"
-                          f"（占 {pct_c:.1f}%），一般玩家约 {r0:.0%}。")
-        c_dim["p"] = round(binom_sf(int(r["mu"] or 0), c_dim["n"], r0), 6)
-        if c_dim["enough"]:
-            c_dim["score"] = p_to_score(c_dim["p"], p_normal)
-            c_dim["plain"] += ("调度频率正常。" if c_dim["score"] < 60
-                               else "调度明显偏多，起手质量异常。")
-
-    # ---- D. 连败运：最大连败长度 vs 该胜率下的合理范围 ----
-    rows = conn.execute(
-        f"""SELECT my_result, start_time FROM matches WHERE {where}
-            ORDER BY start_time""", wargs).fetchall()
-    results = [x["my_result"] for x in rows]
-    n_d = len(results)
-    d_dim = _dim("连败运", n_d, 0, 0, 1.0, min_n, "", "")
-    if n_d:
-        wrate = results.count("win") / n_d
-        streak = max_loss_streak(results)
-        d_dim["observed"] = f"{streak} 连败"
-        d_dim["p"] = round(streak_sf(streak, n_d, wrate), 6)
-        d_dim["obs_desc"] = f"最大连败 {streak}"
-        d_dim["exp_desc"] = f"整体胜率 {wrate:.0%}"
-        d_dim["plain"] = (f"你最长一次连败 {streak} 场，整体胜率 {wrate:.0%}。")
-        if d_dim["enough"]:
-            d_dim["score"] = p_to_score(d_dim["p"], p_normal)
-            d_dim["plain"] += ("这个连败长度在该胜率下完全正常。"
-                               if d_dim["score"] < 60 else
-                               f"以 {wrate:.0%} 的胜率连败 {streak} 场极其罕见，运气异常。")
-
-    # ---- B. 对手运：遭遇类型分布 偏离 此前基线（卡方）+ 克星列表 ----
-    b_window_days = window_days or 30
-    b_start = now_ms - b_window_days * 86_400_000
-    arch = archetype_map(conn, root) if root else {}
-
-    try:
-        conn.execute("SELECT 1 FROM cards_db.cards LIMIT 1")
-        name_sql = "COALESCE(cards.name, 'grpId:' || c.grp_id)"
-        join_b = "LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id"
-    except sqlite3.OperationalError:
-        name_sql = "'grpId:' || c.grp_id"
-        join_b = ""
-
-    def arch_mix(lo_ms: int | None, hi_ms: int | None) -> tuple[dict[str, int], int]:
-        conds_b = list(conds)
-        args_b: list = []
-        if lo_ms is not None:
-            conds_b.append("start_time >= ?")
-            args_b.append(lo_ms)
-        if hi_ms is not None:
-            conds_b.append("start_time < ?")
-            args_b.append(hi_ms)
-        w_b = " AND ".join(conds_b)
-        counts: dict[str, int] = {}
-        total = 0
-        for cr in conn.execute(
-            f"""SELECT DISTINCT m.match_id, {name_sql} cname FROM matches m
-                JOIN commanders c ON c.match_id=m.match_id AND c.seat!=m.my_seat
-                {join_b} WHERE {w_b}""",
-            args_b,
-        ):
-            k = arch.get(cr["cname"], "未知")
-            counts[k] = counts.get(k, 0) + 1
-            total += 1
-        return counts, total
-
-    win_counts, win_n = arch_mix(b_start, None)
-    base_counts, base_n = arch_mix(None, b_start)
-    b_dim = _dim(
-        "对手运", win_n, win_counts, base_counts, 1.0, min_n,
-        f"近 {b_window_days} 天 {win_n} 场遭遇", f"基线 {base_n} 场分布",
-        plain=(f"最近 {b_window_days} 天遇到的 {win_n} 个对手，"
-               f"和之前 {base_n} 场的对手类型分布对比。"),
-    )
-    if win_n and base_n and b_dim["enough"]:
-        stat = 0.0
-        buckets = 0
-        small_obs = small_exp = 0.0
-        for k in sorted(set(win_counts) | set(base_counts)):
-            exp_k = base_counts.get(k, 0) * win_n / base_n
-            obs_k = win_counts.get(k, 0)
-            if exp_k < 1.0:  # 低频类合并，防新主将一己之力拉爆卡方
-                small_obs += obs_k
-                small_exp += exp_k
-                continue
-            stat += (obs_k - exp_k) ** 2 / exp_k
-            buckets += 1
-        if small_exp > 0:
-            stat += (small_obs - small_exp) ** 2 / small_exp
-            buckets += 1
-        df = buckets - 1
-        if df >= 1:
-            b_dim["p"] = round(chi2_sf(stat, df), 6)
-            b_dim["score"] = p_to_score(b_dim["p"], p_normal)
-            b_dim["observed"] = round(stat, 2)
-            b_dim["expected"] = f"卡方 {stat:.1f} (df={df})"
-            b_dim["plain"] += ("对手类型构成正常。" if b_dim["score"] < 60
-                               else "对手类型构成明显改变，像是被刻意匹配。")
-
-    # 克星列表：窗口内遭遇 ≥3 次且我方胜率 <40% 的对手主将
-    nemeses = []
-    if win_n:
-        conds_b = list(conds) + ["start_time >= ?"]
-        args_b: list = [b_start]
-        w_b = " AND ".join(conds_b)
-        for cr in conn.execute(
-            f"""SELECT {name_sql} cname, SUM(m.my_result='win') w, COUNT(*) n
-                FROM matches m
-                JOIN commanders c ON c.match_id=m.match_id AND c.seat!=m.my_seat
-                {join_b} WHERE {w_b} GROUP BY cname HAVING n >= 3""",
-            args_b,
-        ):
-            k = arch.get(cr["cname"], "未知")
-            wr_k = (cr["w"] or 0) * 100.0 / cr["n"]
-            if wr_k < 40:
-                nemeses.append({"archetype": k, "name": cr["cname"],
-                                "n": cr["n"], "wr": round(wr_k, 1)})
-        nemeses.sort(key=lambda x: x["wr"])
-
-    # ---- 合成：配置权重加权平均（仅计入样本足够的维度）----
-    dims = {"play_draw": a_dim, "matchup": b_dim, "mulligan": c_dim, "streak": d_dim}
-    weights = ti["weights"]
-    num = den = 0.0
-    for k, d in dims.items():
-        if d["enough"] and d["score"] is not None:
-            w_k = float(weights.get(k, 0))
-            num += w_k * d["score"]
-            den += w_k
-    composite = round(num / den, 1) if den > 0 else None
-    for d in dims.values():
-        d["verdict"] = _verdict(d["score"] if d["enough"] else None)
-    return {
-        "window_days": window_days,
-        "dimensions": dims,
-        "composite": composite,
-        "label": luck_label(composite) if composite is not None else None,
-        "min_sample": min_n,
-        "nemeses": nemeses[:5],
-        "disclaimer": DISCLAIMER,
-    }
+def targeting_index(conn, cfg=None, window_days=30, exclude_abnormal=True,
+                    exclude_bot=True, root=None, event=None, deck=None, family=None):
+    from .insights import targeting
+    return targeting(conn, cfg, window_days, exclude_abnormal, exclude_bot,
+                     root, event, deck, family)

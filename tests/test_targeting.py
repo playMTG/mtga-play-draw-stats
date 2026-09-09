@@ -96,11 +96,10 @@ def test_balanced_luck_scores_normal(tmp_path):
     a = r["dimensions"]["play_draw"]
     c = r["dimensions"]["mulligan"]
     d = r["dimensions"]["streak"]
-    assert a["enough"] and c["enough"] and d["enough"]
-    assert a["score"] <= 50 and c["score"] <= 50
-    assert d["score"] <= 50  # 1 连败在 50% 胜率下完全正常
-    assert 0 <= r["composite"] <= 70
-    assert r["label"] in ("欧皇", "手气不错", "正常人")
+    assert a["enough"] and a["score"] <= 50
+    assert not c["enough"] and c["score"] is None  # 缺失不再当未调度
+    assert d["score"] is None  # 混合连败仅描述
+    assert r["composite"] is None
 
 
 def test_draw_heavy_and_mulligan_cursed(tmp_path):
@@ -110,8 +109,9 @@ def test_draw_heavy_and_mulligan_cursed(tmp_path):
     conn.commit()
     r = stats.targeting_index(conn, window_days=None)
     assert r["dimensions"]["play_draw"]["score"] == 100.0  # 0/100 先手
-    assert r["dimensions"]["mulligan"]["score"] == 100.0   # 100/100 调度
-    assert r["composite"] >= 60
+    assert r["dimensions"]["mulligan"]["n"] == 100
+    assert r["dimensions"]["mulligan"]["score"] is None  # 无可比基线不判异常
+    assert r["composite"] is None
 
 
 def test_insufficient_sample_excluded(tmp_path):
@@ -121,7 +121,7 @@ def test_insufficient_sample_excluded(tmp_path):
     conn.commit()
     r = stats.targeting_index(conn, window_days=None)
     assert all(not d["enough"] for d in r["dimensions"].values())
-    assert r["composite"] is None and r["label"] is None
+    assert r["composite"] is None
 
 
 def test_window_filters_old_matches(tmp_path):
@@ -142,6 +142,7 @@ def test_nemeses_detected(tmp_path):
         _match(conn, i, pd="draw", res="loss", grp=900001)
     for i in range(100, 115):  # 另一个常胜对手
         _match(conn, i, pd="play", res="win", grp=900002)
+    conn.execute("UPDATE matches SET event_id='Play_Brawl_Historic'")
     conn.commit()
     r = stats.targeting_index(conn, window_days=None, root=None)
     names = [x["name"] for x in r["nemeses"]]

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +48,8 @@ class MatchRecord:
     commanders: list[dict] = field(default_factory=list)  # {seat, grp_id, partner_idx}
     mulligans: list[dict] = field(default_factory=list)   # {game_no, seat, kept_on}
     my_deck_tag: str | None = None   # 导入源自带套牌名（日志解析为 None，手动打标优先）
+    my_deck_id: str | None = None
+    my_deck_version: str | None = None
     my_team: int | None = None
     players: list[dict] = field(default_factory=list)
 
@@ -93,6 +96,8 @@ class SessionBuilder:
         self._last: MatchRecord | None = None   # 最近闭合的对局（迟到结果回填目标）
         self._last_revised: bool = False        # _last 在闭合后又被补了数据
         self.dirty: bool = False        # 自上次 close 以来是否喂入过内容
+        # event -> (name, deck id, fingerprint, explicit CommandZone grpIds)
+        self._course_decks: dict[str, tuple] = {}
 
     # ---------- 主入口 ----------
 
@@ -101,6 +106,34 @@ class SessionBuilder:
         line = text
         self.dirty = True  # 供监听线程判断是否有新内容需要 flush
         jsons = self._parse_jsons(line)
+        # Course 信息明确关联赛事；不能把卡组收藏列表中最后一个套牌当作当前套牌。
+        for d in walk_dicts(jsons):
+            summary = d.get("CourseDeckSummary")
+            event = d.get("InternalEventName")
+            if not (event and isinstance(summary, dict)):
+                continue
+            deck = d.get("CourseDeck")
+            version = None
+            if isinstance(deck, dict) and deck.get("MainDeck"):
+                content = {k: sorted(deck.get(k) or [], key=lambda x: json.dumps(x,sort_keys=True))
+                           for k in ("MainDeck", "Sideboard", "CommandZone", "Companions")}
+                from .deck_versions import local_fingerprint
+                version = local_fingerprint(deck) or ('local:' + hashlib.sha256(json.dumps(content,sort_keys=True).encode()).hexdigest()[:16])
+            command_zone = []
+            if isinstance(deck, dict):
+                for card in deck.get("CommandZone") or []:
+                    if not isinstance(card, dict) or card.get("cardId") is None:
+                        continue
+                    try:
+                        quantity = int(card.get("quantity") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if quantity > 0:
+                        command_zone.append(str(card["cardId"]))
+            self._course_decks[str(event)] = (
+                summary.get("Name"), summary.get("DeckId"), version,
+                list(dict.fromkeys(command_zone)),
+            )
 
         # 时间戳：调用方上下文优先，缺省时从本记录提取
         ts = ts_ms
@@ -153,6 +186,16 @@ class SessionBuilder:
             (str(d["eventId"]) for d in walk_dicts(cfg) if d.get("eventId")), None
         )
         self._resolve_players(m)
+        if m.event_id in self._course_decks:
+            (m.my_deck_tag, m.my_deck_id, m.my_deck_version,
+             command_zone) = self._course_decks[m.event_id]
+            # CommandZone is explicit deck metadata.  It is only attached after
+            # the local player's seat is known; a deck name is never used to infer it.
+            if m.my_seat is not None and "Brawl" in (m.event_id or ""):
+                for index, gid in enumerate(command_zone):
+                    m.commanders.append({
+                        "seat": m.my_seat, "grp_id": gid, "partner_idx": index,
+                    })
         self._cur = m
 
     def _resolve_players(self, m: MatchRecord) -> None:
@@ -258,7 +301,8 @@ class SessionBuilder:
                     self._saw_turn_gt1 = True
             # 主将：ZoneType_Command 区
             zones = gsm.get("zones") or []
-            if any(isinstance(z, dict) and z.get("type") == "ZoneType_Command" for z in zones):
+            if ("Brawl" in (cur.event_id or "") and
+                    any(isinstance(z, dict) and z.get("type") == "ZoneType_Command" for z in zones)):
                 self._on_commanders(zones)
 
     def _on_commanders(self, zones: list) -> None:
@@ -300,7 +344,8 @@ class SessionBuilder:
             mr = d.get("mulliganResp") or d.get("MulliganResp")
             if not isinstance(mr, dict):
                 continue
-            kept = _to_int(mr.get("keptOn") or mr.get("requestedMulliganCount"))
+            kept = _to_int(mr.get("keptOn") if mr.get("keptOn") is not None
+                           else mr.get("requestedMulliganCount"))
             decision = str(mr.get("decision") or "")
             if kept is not None:  # 合成日志 / 未来格式
                 cur.mulligans.append(

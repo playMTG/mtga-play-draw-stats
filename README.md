@@ -4,17 +4,19 @@
 
 ## 不会使用 GitHub？从这里下载
 
-### [点这里直接下载项目 ZIP 压缩包](https://github.com/playMTG/mtga-play-draw-stats/archive/refs/heads/main.zip)
+### [点这里直接下载最新版 Windows ZIP](https://github.com/playMTG/mtga-play-draw-stats/releases/download/v0.1.0/mtga-play-draw-stats-v0.1.0-windows.zip)
+
+[查看版本说明和全部发行版](https://github.com/playMTG/mtga-play-draw-stats/releases)
 
 这是 Windows 本地工具，不需要安装 Git，也不需要注册 GitHub 账号。下载后按下面操作：
 
-1. 打开下载文件夹，找到 `mtga-play-draw-stats-main.zip`。
+1. 打开下载文件夹，找到名称中带 `windows.zip` 的发行包。
 2. 右键压缩包，选择 **“全部解压缩”**。不要直接在压缩包预览窗口里运行文件。
 3. 如果电脑尚未安装 Python，先从 [Python 官网](https://www.python.org/downloads/windows/)下载安装 Python 3.11 或更高版本；安装界面勾选 **Add Python to PATH**。
-4. 打开解压后的 `mtga-play-draw-stats-main` 文件夹，双击 **`start.bat`**。
+4. 打开解压后的 `mtga-play-draw-stats-v0.1.0` 文件夹，双击 **`start.bat`**。
 5. 第一次运行会自动准备环境，可能需要半分钟左右；完成后浏览器会自动打开统计面板。
 
-如果上面的直链没有开始下载：点击 GitHub 页面右上方绿色 **Code** 按钮，再点击 **Download ZIP**。
+如果上面的直链没有开始下载：进入 [Releases 页面](https://github.com/playMTG/mtga-play-draw-stats/releases/latest)，展开 **Assets**，再点击名称中带 `windows.zip` 的文件。
 
 > 下载的是完整项目压缩包，不是单独的 `.exe` 安装程序。以后更新时重新下载 ZIP 并解压即可；覆盖或删除旧文件夹前，请先保留其中的 `data` 目录和 `config.json`（如果存在），它们包含个人对局资料与本机设置。
 

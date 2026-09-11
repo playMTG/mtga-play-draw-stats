@@ -14,6 +14,8 @@ DEFAULTS: dict = {
     "db_path": "data/mtga_stats.db",
     "watch_on_start": True,
     "card_sync_enabled": False,  # 可选联网查卡名；默认只使用已有本地缓存
+    # 卡名离线补齐：只读本机已安装 MTGA 客户端的 Raw_CardDatabase（不联网、不改客户端文件）
+    "card_offline_seed": True,
     "log_paths": {
         "player_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player.log",
         "prev_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player-prev.log",
@@ -22,6 +24,9 @@ DEFAULTS: dict = {
         "steam_session_logs": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\MTGA\\MTGA_Data\\Logs\\Logs",
         # 额外会话日志目录（可选列表）：官方客户端自定义安装位置等场景手动指定
         "session_logs_extra": [],
+        # 额外客户端 Raw 目录（可选列表）：卡名离线补齐用，一般无需填写，
+        # 会自动从会话日志目录反推；只有客户端装在非常规位置时才需要
+        "client_raw_extra": [],
     },
     "abnormal_match": {"max_duration_sec": 150, "max_turns": 2},
     "targeting_index": {
@@ -125,10 +130,36 @@ class Config:
                 out.append(d)
         return out
 
+    def client_raw_dirs(self) -> list[Path]:
+        """已安装 MTGA 客户端的 Raw 数据目录候选（含 Raw_CardDatabase_*.mtga）。
+
+        该目录用于离线补齐卡名（R12.1），是只读来源，不联网、不修改客户端文件。
+        默认从 session_log_dirs() 反推：`.../MTGA_Data/Logs/Logs` → `.../MTGA_Data/Downloads/Raw`，
+        因此官方客户端、Steam 默认库、Steam 多库三种安装形态自动覆盖；
+        非常规安装位置可用 log_paths.client_raw_extra 显式指定。
+        """
+        dirs: list[Path] = []
+        lp = self._d.get("log_paths", {})
+        for s in lp.get("client_raw_extra") or []:
+            dirs.append(self.expand(str(s)))
+        for d in self.session_log_dirs():
+            parts = list(d.parts)
+            if len(parts) >= 3 and parts[-1].lower() == "logs" and parts[-2].lower() == "logs":
+                mtga_data = Path(*parts[:-2])
+                if mtga_data.name.lower() == "mtga_data":
+                    dirs.append(mtga_data / "Downloads" / "Raw")
+        seen: set[str] = set()
+        out: list[Path] = []
+        for d in dirs:
+            key = str(d).lower().rstrip("\\")
+            if key not in seen:
+                seen.add(key)
+                out.append(d)
+        return out
+
     @property
     def my_player_id(self) -> str:
         return str(self._d.get("my_player_id") or "")
-
     @property
     def abnormal_max_duration(self) -> float:
         return float(self._d["abnormal_match"]["max_duration_sec"])

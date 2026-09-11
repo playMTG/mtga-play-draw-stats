@@ -7,8 +7,18 @@ from pathlib import Path
 
 from .config import Config
 from .events import MatchRecord
+from .ingest_marks import MARKS_SCHEMA
+from .cards_sync import CARDS_SCHEMA as _CARDS_SCHEMA_BODY
 
 SCHEMA_VERSION = 2
+
+# 卡名库的表结构以 cards_sync 为准（单一事实源），这里只加一个 cards_db. 前缀，
+# 用于「ATTACH 完立即建表」——否则全新解压时 ATTACH 出来的空库里没有 cards 表，
+# 所有查询都会撞 "no such table: cards_db.cards"（R12.5）。
+_CARDS_TABLE_DDL = _CARDS_SCHEMA_BODY.replace(
+    "CREATE TABLE IF NOT EXISTS cards",
+    "CREATE TABLE IF NOT EXISTS cards_db.cards",
+)
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -62,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_games_match ON games(match_id);
 CREATE INDEX IF NOT EXISTS idx_mull_match ON mulligans(match_id);
 CREATE INDEX IF NOT EXISTS idx_cmdr_match ON commanders(match_id);
 CREATE INDEX IF NOT EXISTS idx_matches_start ON matches(start_time);
-"""
+""" + MARKS_SCHEMA
 
 
 def connect(db_path: Path, cards_db_path: Path | None = None) -> sqlite3.Connection:
@@ -75,9 +85,22 @@ def connect(db_path: Path, cards_db_path: Path | None = None) -> sqlite3.Connect
     conn.executescript(_SCHEMA)
     _migrate(conn)
     # 挂载卡名库（grpId→卡名），缺失时优雅降级为仅 grpId
-    if cards_db_path and cards_db_path.exists():
+    # 注意：**不管文件是否存在都要 ATTACH**（R12.1）。全新安装时 data/mtga_cards.db
+    # 还不存在，而它是在启动后被 cards_db_connect 创建的；如果这里因为文件不存在
+    # 就跳过挂载，主连接此后永远看不到 cards 表，补齐了卡名页面也读不出来。
+    if cards_db_path:
         try:
+            cards_db_path.parent.mkdir(parents=True, exist_ok=True)
             conn.execute("ATTACH DATABASE ? AS cards_db", (str(cards_db_path),))
+            # 全新解压时 ATTACH 出来的是一张空库，cards 表要等 cards_db_connect 才建。
+            # 两者之间（以及客户端库缺失时的整个启动期）任何查询都会撞
+            # "no such table: cards_db.cards"。这里无条件把表补出来，
+            # 让「已挂载」与「表可用」保持一致（R12.5）。
+            try:
+                conn.execute(_CARDS_TABLE_DDL)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # 只读挂载等场景：降级为仅 grpId
             # 迁移：旧版卡名库缺 name_zh 列（中文卡名，M4），幂等补齐
             try:
                 conn.execute("SELECT name_zh FROM cards_db.cards LIMIT 1")
@@ -85,7 +108,7 @@ def connect(db_path: Path, cards_db_path: Path | None = None) -> sqlite3.Connect
                 try:
                     conn.execute("ALTER TABLE cards ADD COLUMN name_zh TEXT")
                 except sqlite3.OperationalError:
-                    pass  # 只读挂载等场景：降级为仅英文名
+                    pass  # 表还没建/只读挂载等场景：降级为仅英文名
         except sqlite3.OperationalError:
             pass
     conn.execute(

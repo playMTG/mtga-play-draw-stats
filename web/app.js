@@ -933,10 +933,50 @@ async function loadStatus() {
     $("watch-txt").textContent = s.last_error ? `解析待重试：${s.last_error}` : s.watching
       ? `监听中 · 库内 ${s.db.matches} 场`
       : `监听未启用 · 库内 ${s.db.matches} 场`;
+    renderCardNamesNote(s.card_names);
   } catch {
     $("watch-txt").textContent = "服务不可达";
   }
 }
+
+/** 卡名覆盖提示（R12.1）：没有卡名时给出可执行的离线补齐入口。 */
+function renderCardNamesNote(c) {
+  const box = $("card-names-note");
+  if (!box) return;
+  if (!c || !c.total || c.missing === 0) { box.hidden = true; return; }
+  box.hidden = false;
+  const parts = [`当前 ${c.total} 个对手主将里，${c.missing} 个还没有卡名（页面显示为 grpId）。`];
+  if (c.client_db) {
+    parts.push("已找到本机 MTGA 客户端的卡牌库，点下面按钮即可离线补齐英文名。");
+  } else {
+    parts.push("未找到本机 MTGA 客户端的卡牌库（Raw_CardDatabase_*.mtga）；"
+      + "可在 config.json 的 log_paths.client_raw_extra 指定目录，"
+      + "或打开 card_sync_enabled 后联网补全。");
+  }
+  if (c.online_sync) parts.push("联网补全已开启。");
+  parts.push("中文译名不在客户端库里，需要本地牌名快照或联网同步。");
+  $("card-names-detail").textContent = parts.join("");
+  $("card-names-title").textContent = c.named === 0 ? "对手主将还没有卡名" : "部分对手主将还没有卡名";
+  const btn = $("card-names-seed");
+  btn.hidden = !c.client_db;
+  $("card-names-hint").hidden = !c.client_db;
+}
+
+$("card-names-seed").addEventListener("click", async () => {
+  const btn = $("card-names-seed");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "正在补齐…";
+  try {
+    const r = await fetch("/api/card_names_seed", {method: "POST"}).then(x => x.json());
+    btn.textContent = r.seeded ? `已补齐 ${r.seeded} 张`
+      : r.client_db ? "没有可补齐的卡名" : "未找到客户端卡牌库";
+    if (r.seeded) await reload();
+  } catch {
+    btn.textContent = "补齐失败，请重试";
+  }
+  setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 2500);
+});
 
 async function reload() {
   await Promise.all([

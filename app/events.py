@@ -101,6 +101,7 @@ class SessionBuilder:
         self._last_revised: bool = False        # _last 在闭合后又被补了数据
         self._closed_by_id: dict[str, MatchRecord] = {}
         self._pending_fmr: list[tuple[str, dict]] = []
+        self._last_ts: int | None = None   # 最近一次看到的时间戳（水位线续读用）
         self.dirty: bool = False        # 自上次 close 以来是否喂入过内容
         # event -> (name, deck id, fingerprint, explicit CommandZone grpIds)
         self._course_decks: dict[str, tuple] = {}
@@ -146,6 +147,8 @@ class SessionBuilder:
         if ts is None:
             if m := TS_RE.search(line):
                 ts = int(m.group(1))
+        if ts is not None:
+            self._last_ts = ts
         if self._cur is not None and ts is not None:
             self._cur._last_ts = ts
 
@@ -469,6 +472,16 @@ class SessionBuilder:
                 return
 
     # ---------- 收尾 ----------
+
+    @property
+    def in_progress(self) -> bool:
+        """是否有一场对局尚未闭合（水位线只在 False 时落盘，R12.2）。"""
+        return self._cur is not None
+
+    @property
+    def last_ts(self) -> int | None:
+        """最近一次看到的时间戳，供续读时恢复上下文。"""
+        return self._last_ts
 
     def close(self) -> SessionResult:
         if self._cur is not None:

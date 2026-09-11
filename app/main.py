@@ -27,6 +27,11 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 _conn: store.sqlite3.Connection | None = None
 _db_lock = threading.Lock()  # SQLite 连接跨线程共用，读写统一加锁
+# 连接初始化单独用一把锁：q() 会在持有 _db_lock 的情况下调用 get_conn()，
+# 若这里复用 _db_lock 就是自锁（R12.3）
+_conn_lock = threading.Lock()
+# 启动任务的「检查并在同一临界区置位」用锁（R12.3）
+_boot_lock = threading.Lock()
 _watcher: LogWatcher | None = None
 _watcher_thread: threading.Thread | None = None
 _stop_event = threading.Event()  # 通知后台线程退出（R11.3）
@@ -41,10 +46,20 @@ _state = {
 
 
 def get_conn():
+    """惰性建立全局连接（双检加锁）。
+
+    首屏请求、启动回填线程和监听线程是并发起来的，此前无锁会让两个线程
+    各自 connect 一次，后来者覆盖 _conn，先前那个连接连同它的 WAL 句柄
+    被丢在一边继续被调用方使用（R12.3）。这里用独立的 _conn_lock 做双检：
+    只有第一次真正需要建连接。
+    """
     global _conn
-    if _conn is None:
-        _conn = store.connect(cfg.db_path, cfg.root / "data" / "mtga_cards.db")
-    return _conn
+    if _conn is not None:
+        return _conn
+    with _conn_lock:
+        if _conn is None:
+            _conn = store.connect(cfg.db_path, cfg.root / "data" / "mtga_cards.db")
+        return _conn
 
 
 def _safe_exists(path: Path) -> bool:
@@ -131,9 +146,15 @@ def _watch_loop() -> None:
 
 def _watch_loop_inner() -> None:
     global _watcher
+    from .ingest_marks import IngestMarks
+
+    conn = get_conn()
+    marks = IngestMarks(conn)
+    # 水位线：回填刚记录过这两个文件的消费位置，监听从这里接上，
+    # 不再把整份 Player.log 从头重放一遍（R12.2）
     watchers = [
-        LogWatcher(cfg.player_log),
-        LogWatcher(cfg.prev_log),
+        LogWatcher(cfg.player_log, start_offset=marks.resume_offset(cfg.player_log)),
+        LogWatcher(cfg.prev_log, start_offset=marks.resume_offset(cfg.prev_log)),
     ]
     _watcher = watchers[0]
     # 没有身份时座位/先后手/对手/胜负全都解析不出来。
@@ -145,11 +166,21 @@ def _watch_loop_inner() -> None:
         _persist_player_id(my_id)
     builders = [SessionBuilder(source="log", my_player_id=my_id)
                 for _ in watchers]
-    conn = get_conn()
     pending_matches: list = []
     pending_ranks: list = []
     last_detect_attempt = 0.0
     _state["watching"] = True
+
+    def save_marks() -> None:
+        """只在没有未闭合对局时落水位线。
+
+        中途落盘会让下次启动错过那一场的开头，后续事件就失去归属（R11.1 修
+        的正是结果串场），所以宁可多重放一场也不在半场处记位置。
+        """
+        for w, sb in zip(watchers, builders):
+            if sb.in_progress:
+                continue
+            marks.put(w.path, w.offset, w.last_ts)
 
     def ensure_identity() -> None:
         nonlocal my_id, last_detect_attempt
@@ -220,6 +251,7 @@ def _watch_loop_inner() -> None:
             try:
                 with _db_lock:
                     flush()
+                    save_marks()
                 _state["last_success_at"] = int(time.time()*1000)
                 _state["last_error"] = None
             except Exception as exc:
@@ -231,24 +263,53 @@ def _watch_loop_inner() -> None:
         _stop_event.wait(2)
 
 
-def _cards_sync_loop() -> None:
-    """卡名自动同步线程：发现没见过的 grpId 就地从 Scryfall 拉取。
+def _seed_client_cards(stats_conn, cards_conn) -> dict:
+    """离线补齐卡名：只读本机 MTGA 客户端的卡牌库（R12.1）。
 
-    启动即同步一次（覆盖回填新入库的主将），之后每 5 分钟增量检查——
-    保证"第一次遇到的对手主将"自动补全卡名，无需手动跑 tools/update_cards。
+    客户端自带的 `Raw_CardDatabase_*.mtga` 是 SQLite，含全部英文卡名。
+    这一步完全离线，是「开箱能看到卡名」的默认路径；中文译名仍走可选的
+    联网同步或本地快照导入。
+    """
+    from .client_cards import seed_cards_db
+
+    if not cfg.get("card_offline_seed", True):
+        return {"client_db": None, "pending": 0, "seeded": 0,
+                "unresolved": 0, "error": "disabled"}
+    try:
+        r = seed_cards_db(cards_conn, stats_conn, cfg.client_raw_dirs())
+    except Exception as exc:  # 客户端目录异常不应影响面板
+        return {"client_db": None, "pending": 0, "seeded": 0,
+                "unresolved": 0, "error": f"{type(exc).__name__}"}
+    if r.get("seeded"):
+        _state["cards_seeded"] = _state.get("cards_seeded", 0) + r["seeded"]
+    _state["cards_client_db"] = r.get("client_db")
+    return r
+
+
+def _cards_loop() -> None:
+    """卡名维护线程：离线补齐（默认）→ 可选联网同步。
+
+    离线部分每轮都跑：新遇到的对手主将从本机客户端库就地补英文名。
+    联网部分只在 card_sync_enabled 打开时执行，且只补中文译名与元数据。
     """
     from .cards_sync import cards_db_connect, sync_pending_cards
 
     stats_conn = sqlite3.connect(cfg.db_path, check_same_thread=False)
     stats_conn.row_factory = sqlite3.Row
     cards_conn = cards_db_connect(cfg.root / "data" / "mtga_cards.db")
+    online = bool(cfg.get("card_sync_enabled", False))
     while not _stop_event.is_set():
         try:
-            ok, total = sync_pending_cards(stats_conn, cards_conn)
-            if total:
-                _state["cards_synced"] = _state.get("cards_synced", 0) + ok
+            _seed_client_cards(stats_conn, cards_conn)
         except Exception:
-            pass  # 网络失败不杀线程，下个周期重试
+            pass  # 单轮失败不杀线程，下个周期重试
+        if online:
+            try:
+                ok, total = sync_pending_cards(stats_conn, cards_conn)
+                if total:
+                    _state["cards_synced"] = _state.get("cards_synced", 0) + ok
+            except Exception:
+                pass  # 网络失败不杀线程，下个周期重试
         _stop_event.wait(300)
     try:
         stats_conn.close()
@@ -284,6 +345,7 @@ def _boot_tasks() -> None:
         _state["boot_backfill"] = {
             "new": r.get("new"),
             "updated": r.get("updated"),
+            "skipped": r.get("skipped"),
             "stats": r.get("stats"),
             "files": len(r.get("per_file") or []),
         }
@@ -294,10 +356,29 @@ def _boot_tasks() -> None:
 
     _state["boot_stage"] = "bot_tags"
     try:
-        store.tag_bot_decks(get_conn(), cfg.get("bot_deck_patterns") or [])
+        # 与 cards 阶段同样在锁内：这是写库操作，而首屏请求可能同时在建连接，
+        # 锁外调用会与 API 的读写撞在一起（R12.3）
+        with _db_lock:
+            store.tag_bot_decks(get_conn(), cfg.get("bot_deck_patterns") or [])
     except Exception as exc:
         prev = _state.get("boot_error")
         msg = f"bot_tags:{type(exc).__name__}:{exc}"
+        _state["boot_error"] = f"{prev}; {msg}" if prev else msg
+
+    # 卡名离线补齐：回填入库后才知道有哪些 grpId，所以放在这里，
+    # 保证第一次打开页面时对手主将已经是卡名而不是 grpId（R12.1）
+    _state["boot_stage"] = "cards"
+    try:
+        from .cards_sync import cards_db_connect
+        cards_conn = cards_db_connect(cfg.root / "data" / "mtga_cards.db")
+        try:
+            with _db_lock:
+                _state["cards_boot"] = _seed_client_cards(get_conn(), cards_conn)
+        finally:
+            cards_conn.close()
+    except Exception as exc:
+        prev = _state.get("boot_error")
+        msg = f"cards:{type(exc).__name__}:{exc}"
         _state["boot_error"] = f"{prev}; {msg}" if prev else msg
 
     _state["boot_stage"] = None
@@ -318,9 +399,8 @@ def on_startup() -> None:
         _state["config_error"] = cfg.config_error
     # 先让 HTTP 服务立即可用，重活交给后台线程
     threading.Thread(target=_boot_tasks, daemon=True).start()
-    if cfg.get("card_sync_enabled", False):
-        t2 = threading.Thread(target=_cards_sync_loop, daemon=True)
-        t2.start()
+    # 卡名维护线程常驻：离线补齐默认开启，联网同步由 card_sync_enabled 决定
+    threading.Thread(target=_cards_loop, daemon=True).start()
 
 
 @app.on_event("shutdown")
@@ -343,6 +423,20 @@ def q(fn, *args, **kwargs):
     """在全局锁内执行一次数据库查询（SQLite 连接跨线程共用）。"""
     with _db_lock:
         return fn(get_conn(), *args, **kwargs)
+
+
+def cards_joinable(conn) -> bool:
+    """cards_db.cards 是否可查询。
+
+    ATTACH 成功不代表表存在：全新解压时 data/mtga_cards.db 由本模块的
+    _seed_client_cards 之后才建表，客户端卡牌库缺失的机器上也可能一直没有表。
+    裸查会撞 "no such table: cards_db.cards"，所以拼 SQL 前先探一次（R12.5）。
+    """
+    try:
+        conn.execute("SELECT 1 FROM cards_db.cards LIMIT 1")
+        return True
+    except sqlite3.OperationalError:
+        return False
 
 
 @app.get("/api/overview")
@@ -493,7 +587,16 @@ def api_daily(day: str | None = None, exclude_abnormal: bool = True,
 
 @app.get("/api/status")
 def api_status():
+    from .client_cards import find_card_database, name_coverage
+
     def _get(conn):
+        coverage = name_coverage(conn, cfg.root, cfg.get("card_name_lang", "zh"))
+        # 启动早期还没跑过补齐时 _state 里没有记录，直接现场探测一次，
+        # 避免页面短暂显示「未找到客户端库」
+        client_db = _state.get("cards_client_db")
+        if not client_db:
+            found = find_card_database(cfg.client_raw_dirs())
+            client_db = str(found) if found else None
         return {
             "db": store.stats(conn),
             "watching": _state["watching"],
@@ -511,17 +614,49 @@ def api_status():
             "identity_ready": bool(_state.get("my_player_id") or cfg.my_player_id),
             "dropped_matches": _state.get("dropped_matches", 0),
             "last_drop": _state.get("last_drop"),
+            "card_names": {
+                **coverage,
+                "client_db": client_db,
+                "offline_seed": bool(cfg.get("card_offline_seed", True)),
+                "online_sync": bool(cfg.get("card_sync_enabled", False)),
+                "seeded": _state.get("cards_seeded", 0),
+                "synced": _state.get("cards_synced", 0),
+            },
         }
     return q(_get)
 
 
+@app.post("/api/card_names_seed")
+def api_card_names_seed():
+    """手动触发一次卡名离线补齐（只读本机客户端卡牌库，不联网）。"""
+    from .cards_sync import cards_db_connect
+
+    try:
+        cards_conn = cards_db_connect(cfg.root / "data" / "mtga_cards.db")
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=500, detail=f"卡名库不可用：{exc}")
+    try:
+        with _db_lock:
+            r = _seed_client_cards(get_conn(), cards_conn)
+    finally:
+        cards_conn.close()
+    return {"ok": True, **r}
+
+
 @app.post("/api/retry_boot")
 def api_retry_boot():
-    """启动归档/回填失败后的手动重试入口（幂等，可重复调用）。"""
-    if _state.get("booting"):
-        return {"ok": False, "error": "启动任务仍在进行中"}
-    if not _state.get("boot_error"):
-        return {"ok": True, "skipped": True, "message": "上次启动无错误"}
+    """启动归档/回填失败后的手动重试入口（幂等，可重复调用）。
+
+    「读 booting → 起线程」之间存在窗口：两次点按之间线程还没跑到置位，
+    就会起两个回填线程并发写库（R12.3）。这里把检查与置位放进同一把锁，
+    置位先生效，线程起来后再由 _boot_tasks 接管。
+    """
+    with _boot_lock:
+        if _state.get("booting"):
+            return {"ok": False, "error": "启动任务仍在进行中"}
+        if not _state.get("boot_error"):
+            return {"ok": True, "skipped": True, "message": "上次启动无错误"}
+        _state["booting"] = True  # 先占位，避免窗口内重复起线程
     threading.Thread(target=_boot_tasks, daemon=True).start()
     return {"ok": True, "message": "已重新启动归档/回填"}
 
@@ -535,10 +670,15 @@ def api_opp_tag_by_name(commander: str = Query(...), tag: str = Query("")):
             gid = commander.removeprefix("grpId:")
             where_sql = "c.grp_id = ?"
             args: tuple = (gid,)
-        else:
+        elif cards_joinable(conn):
             where_sql = ("COALESCE((SELECT name FROM cards_db.cards WHERE grp_id = c.grp_id), "
                          "'grpId:' || c.grp_id) = ?")
             args = (commander,)
+        else:
+            # 卡名库无表：主将名只可能以 grpId:xxx 形态存在，别名匹配必然落空。
+            # 不用裸查 cards_db，避免 "no such table"（R12.5）。
+            where_sql = "0"
+            args = ()
         if tag and tag not in stats.ARCH_KEYS:
             return {"ok": False, "error": f"非法类型：{tag}"}
         profile_key = commander
@@ -607,14 +747,25 @@ def api_opp_tag(match_id: str = Query(...), tag: str = Query("")):
                     "scope": "match"}
         if "Brawl" not in (match["event_id"] or ""):
             return {"ok": False, "error": "该赛事不适用构筑对手类型标签"}
-        row = conn.execute(
-            """SELECT COALESCE(cards.name, 'grpId:' || c.grp_id) name
-               FROM commanders c
-               LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id
-               WHERE c.match_id = ? AND c.seat != (SELECT my_seat FROM matches WHERE match_id = ?)
-               LIMIT 1""",
-            (match_id, match_id),
-        ).fetchone()
+        if cards_joinable(conn):
+            row = conn.execute(
+                """SELECT COALESCE(cards.name, 'grpId:' || c.grp_id) name
+                   FROM commanders c
+                   LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id
+                   WHERE c.match_id = ? AND c.seat != (SELECT my_seat FROM matches WHERE match_id = ?)
+                   LIMIT 1""",
+                (match_id, match_id),
+            ).fetchone()
+        else:
+            # 卡名库无表：退化为纯 grpId 形态，不用裸 JOIN（R12.5）
+            row = conn.execute(
+                """SELECT 'grpId:' || c.grp_id name
+                   FROM commanders c
+                   WHERE c.match_id = ? AND c.seat != (SELECT my_seat FROM matches WHERE match_id = ?)
+                     AND c.grp_id IS NOT NULL
+                   LIMIT 1""",
+                (match_id, match_id),
+            ).fetchone()
         if row is None:
             return {"ok": False, "error": "该对局无对手主将记录"}
         name = row["name"]

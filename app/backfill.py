@@ -18,7 +18,8 @@ from pathlib import Path
 
 from .config import Config, load_config
 from .events import SessionBuilder
-from .parser import iter_records
+from .ingest_marks import IngestMarks
+from .parser import iter_records_with_offsets
 from . import store
 
 USERID_RE = re.compile(r'"userId"\s*:\s*"([A-Z0-9]{8,})"')
@@ -82,15 +83,23 @@ def backfill(cfg: Config, files: list[Path]) -> dict:
         print("!! 未能探测到玩家身份（日志中无 reservedPlayers）", file=sys.stderr)
 
     conn = store.connect(cfg.db_path)
-    total_new = total_updated = 0
+    marks = IngestMarks(conn)
+    total_new = total_updated = total_skipped = 0
     per_file: list[tuple[str, int, int]] = []
 
     for f in files:
         src_name = f.name
+        # 水位线：文件自上次消费以来一个字节都没变 → 整份跳过（R12.2）。
+        # 归档日志是这一步的主要收益：它们不再变化，却占了全部解析量的大头。
+        if marks.is_unchanged(f):
+            total_skipped += 1
+            continue
         sb = SessionBuilder(source="log", my_player_id=my_id)
+        consumed = 0
         try:
-            for text, ts in iter_records(f):
+            for text, ts, end in iter_records_with_offsets(f):
                 sb.feed(text, ts)
+                consumed = end
         except OSError as e:
             print(f"!! 读取失败 {f}: {e}", file=sys.stderr)
             continue
@@ -103,6 +112,9 @@ def backfill(cfg: Config, files: list[Path]) -> dict:
                 upd += 1
         for snap in result.ranks:
             store.insert_rank(conn, snap)
+        # 只有真正读到内容才落水位线；中途失败不记录，下次重来
+        if consumed:
+            marks.put(f, consumed, sb.last_ts)
         conn.commit()
         per_file.append((src_name, len(result.matches), result.unparsed_lines))
         total_new += new
@@ -114,6 +126,7 @@ def backfill(cfg: Config, files: list[Path]) -> dict:
         "my_id": my_id,
         "new": total_new,
         "updated": total_updated,
+        "skipped": total_skipped,
         "stats": st,
         "per_file": per_file,
     }
@@ -132,7 +145,7 @@ def main() -> int:
 
     r = backfill(cfg, files)
     print(f"身份探测: {r['my_id']}")
-    print(f"来源文件: {len(files)} 份")
+    print(f"来源文件: {len(files)} 份（跳过未变化 {r['skipped']} 份）")
     for name, n, bad in r["per_file"]:
         print(f"  {name}: 解析对局 {n}, 损坏行 {bad}")
     st = r["stats"]

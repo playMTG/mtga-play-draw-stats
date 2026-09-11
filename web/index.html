@@ -94,6 +94,15 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 <h1 data-page-node-id="0vSnjXLiur5k911BDfGH6b">MTGA 对局战报</h1>
 <div class="sub" data-page-node-id="W79zszCrtfjPHMcuVyh5cs">本地数据面板 · 全赛制 · 日志与历史导入 · 默认离线，卡名联网同步可选</div>
 
+<div class="card" id="card-names-note" style="margin-bottom:14px;border-color:#d9c37a" hidden>
+  <h2 id="card-names-title">对手主将还没有卡名</h2>
+  <p id="card-names-detail" class="ci"></p>
+  <div class="bar" style="margin:8px 0 0">
+    <button id="card-names-seed">从本机客户端补齐卡名</button>
+    <span class="ci" id="card-names-hint">只读取本机已安装的 MTGA 卡牌库，不联网、不改客户端文件。</span>
+  </div>
+</div>
+
 <div class="bar" data-page-node-id="4w9ccm2SuaNhm0HzbUCPCP">
   <label data-page-node-id="jvY4xgjqeV9lpVmGGmnkzX">赛制 <select id="f-family" data-page-node-id="EfiQbGAqvsPwIHrrV2QXsv"><option value="" data-page-node-id="16UaQNAHrBlqH8QgEWwa1W">全部</option></select></label>
   <label data-page-node-id="uDC6sBxsqcocQyYunFdmWr">赛事 <select id="f-event" data-page-node-id="GuA0fpLkDD2XAX9ZtQySo7"><option value="" data-page-node-id="ECHTm8egDWk9lRRqGBGa4B">全部</option></select></label>
@@ -274,6 +283,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=0.3.1-ui"></script>
+<script src="app.js?v=0.4.0-cardnames"></script>
 </body>
 </html>

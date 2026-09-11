@@ -127,23 +127,38 @@ def iter_lines(path: Path, start_offset: int = 0) -> Iterator[LineRecord]:
             yield LineRecord(line_no, text, ts_ms, len(raw))
 
 
-def iter_records(path: Path, start_offset: int = 0) -> Iterator[tuple[str, int | None]]:
+def iter_records(path: Path, start_offset: int = 0,
+                 initial_ts: int | None = None) -> Iterator[tuple[str, int | None]]:
     """产出逻辑记录 (text, ts_ms)：单行或多行 JSON 块已合并。
 
     时间戳上下文跨记录延续（不少记录块自身不带 timestamp，如段位响应），
-    取"最近一次出现的时间戳"——与文件顺序单调一致。
+    取"最近一次出现的时间戳"——与文件顺序单调一致。`initial_ts` 用于
+    从中途偏移续读时恢复上下文（R12.2 水位线）。
+    """
+    for text, ts, _ in iter_records_with_offsets(path, start_offset, initial_ts):
+        yield text, ts
+
+
+def iter_records_with_offsets(path: Path, start_offset: int = 0,
+                              initial_ts: int | None = None
+                              ) -> Iterator[tuple[str, int | None, int]]:
+    """同 iter_records，额外产出该记录结束后的字节偏移（水位线用，R12.2）。
+
+    偏移只在逻辑记录边界上产出，因此可以直接作为下次续读的起点。
     """
     asm = RecordAssembler()
-    pending_ts: int | None = None
+    pending_ts: int | None = initial_ts
+    offset = start_offset
 
     for rec in iter_lines(path, start_offset):
+        offset += rec.nbytes
         if m := TS_RE.search(rec.text):
             pending_ts = int(m.group(1))
         done = asm.feed(rec.text)
         if done:
-            yield done[0], pending_ts
+            yield done[0], pending_ts, offset
     for record in asm.flush():
-        yield record, pending_ts  # 文件尾截断块兜底产出
+        yield record, pending_ts, offset  # 文件尾截断块兜底产出
 
 
 def walk_dicts(obj) -> Iterator[dict]:

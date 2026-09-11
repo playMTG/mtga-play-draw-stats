@@ -70,7 +70,21 @@ class CardNames:
         if english and cached.get('name_en') != english:
             cached = {}
         zh = cached.get('name_zh') or row.get('name_zh') or ''
-        source = cached.get('source') if cached.get('name_zh') else ('已有缓存（来源未记录）' if zh else '英文回退')
+        src = row.get('source')
+        if zh:
+            source = cached.get('source') or '已有缓存（来源未记录）'
+        elif english and src == 'client':
+            # 客户端库只提供英文名，没有中文译名
+            source = '本机客户端卡名库（无中文译名）'
+        elif english and src == 'scryfall':
+            source = 'Scryfall（尚未取到中文译名）'
+        elif english:
+            # 有英文名但 source 为空：早期版本导入时还没有 source 列，
+            # 无法回溯真实来源，如实标注「未记录」而不是猜一个（R12.1）
+            source = '英文名（来源未记录）'
+        else:
+            # 完全没名字：展示的就是 grpId，不能再声称是「英文回退」（R12.1）
+            source = '缺卡名（客户端库与译名库均未命中）'
         local = self.local.get(gid)
         if isinstance(local, dict) and isinstance(local.get('name_zh'), str) and local['name_zh'].strip():
             zh = local['name_zh'].strip()

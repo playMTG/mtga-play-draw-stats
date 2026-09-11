@@ -32,7 +32,7 @@ class LogWatcher:
     重放 upsert 时子表重写会冲坏回填的正确数据）。
     """
 
-    def __init__(self, path: Path, poll_sec: float = 0.5):
+    def __init__(self, path: Path, poll_sec: float = 0.5, start_offset: int = 0):
         self.path = path
         self.poll_sec = poll_sec
         self._fp: _Fingerprint | None = None
@@ -40,6 +40,16 @@ class LogWatcher:
         self._identity = None
         self._prefix = b""
         self._ts = None
+        self._start_offset = int(start_offset or 0)
+
+    @property
+    def offset(self) -> int:
+        """已消费到的字节偏移（水位线落盘用，R12.2）。"""
+        return self._fp.offset if self._fp else 0
+
+    @property
+    def last_ts(self) -> int | None:
+        return self._ts
 
     def _current_size(self) -> int | None:
         try:
@@ -60,7 +70,10 @@ class LogWatcher:
         replaced |= bool(self._prefix and not prefix.startswith(self._prefix))
         self._identity = identity
         if self._fp is None:
-            self._fp = _Fingerprint(self.path, size, 0)
+            # 首次建立指纹：水位线给出「已消费到哪」时从那里继续，否则从头。
+            # 只有文件一个字节都没变时水位线才非零，因此该偏移必定是记录边界。
+            start = self._start_offset if self._start_offset <= size else 0
+            self._fp = _Fingerprint(self.path, size, start)
         elif replaced or size < self._fp.offset:
             # 旧文件若仍以改名形式存在（prev），由调用方决定是否补读；
             # 轮换前先 flush 未闭合块，避免跨轮换的尾部 JSON 丢失（R11.3 / M5）。

@@ -4,7 +4,8 @@
   "log_paths": {
     "player_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player.log",
     "prev_log": "%USERPROFILE%\\AppData\\LocalLow\\Wizards Of The Coast\\MTGA\\Player-prev.log",
-    "steam_session_logs": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\MTGA\\MTGA_Data\\Logs\\Logs"
+    "steam_session_logs": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\MTGA\\MTGA_Data\\Logs\\Logs",
+    "client_raw_extra": []
   },
   "abnormal_match": {
     "max_duration_sec": 150,
@@ -15,6 +16,7 @@
   },
   "my_deck_tags": {},
   "card_name_lang": "zh",
+  "card_offline_seed": true,
   "bot_deck_patterns": [
     "bot"
   ],

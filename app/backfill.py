@@ -24,6 +24,14 @@ from . import store
 USERID_RE = re.compile(r'"userId"\s*:\s*"([A-Z0-9]{8,})"')
 
 
+def _safe_exists(path: Path) -> bool:
+    """Path.exists 在 Windows 上可能因日志被独占抛 PermissionError。"""
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def collect_sources(cfg: Config, extra_file: Path | None = None) -> list[Path]:
     files: list[Path] = []
     if extra_file:
@@ -39,7 +47,7 @@ def collect_sources(cfg: Config, extra_file: Path | None = None) -> list[Path]:
             except OSError:
                 pass
     for p in (cfg.player_log, cfg.prev_log):
-        if p.exists():
+        if _safe_exists(p):
             files.append(p)
     for d in cfg.session_log_dirs():
         if not d.is_dir():

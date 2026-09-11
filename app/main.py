@@ -29,7 +29,15 @@ _conn: store.sqlite3.Connection | None = None
 _db_lock = threading.Lock()  # SQLite 连接跨线程共用，读写统一加锁
 _watcher: LogWatcher | None = None
 _watcher_thread: threading.Thread | None = None
-_state = {"watching": False, "last_events": 0}
+_stop_event = threading.Event()  # 通知后台线程退出（R11.3）
+_state = {
+    "watching": False,
+    "last_events": 0,
+    "boot_stage": None,
+    "boot_error": None,
+    "boot_done_at": None,
+    "config_error": None,
+}
 
 
 def get_conn():
@@ -37,6 +45,71 @@ def get_conn():
     if _conn is None:
         _conn = store.connect(cfg.db_path, cfg.root / "data" / "mtga_cards.db")
     return _conn
+
+
+def _safe_exists(path: Path) -> bool:
+    """Path.exists 在 Windows 上可能因日志被独占抛 PermissionError。"""
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _log_paths() -> list[Path]:
+    return [p for p in (cfg.player_log, cfg.prev_log) if _safe_exists(p)]
+
+
+def _detect_player_id() -> str | None:
+    """config 优先；否则与 backfill 同源探测。探测失败返回 None，可重试。"""
+    configured = (cfg.my_player_id or "").strip()
+    if configured:
+        return configured
+    from .backfill import detect_player_id
+    try:
+        return detect_player_id(_log_paths())
+    except OSError:
+        return None
+
+
+def _persist_player_id(player_id: str) -> None:
+    """探测成功后写回 config.json，避免下次启动再丢身份。
+
+    R11.3/H3：config.json 已存在且无法解析时**禁止**自动覆盖，
+    否则会把损坏文件替换成只剩 my_player_id 的空配置。
+    """
+    import json
+    from datetime import datetime
+
+    cfg_file = cfg.root / "config.json"
+    if cfg_file.exists():
+        if getattr(cfg, "config_error", None):
+            return  # 已损坏：保留原文件，等用户修复
+        try:
+            raw = cfg_file.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("config.json 顶层必须是对象")
+        except (json.JSONDecodeError, OSError, ValueError):
+            # 读取/解析失败：备份损坏文件，绝不静默覆盖
+            try:
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                bak = cfg_file.with_name(f"config.json.corrupt-{stamp}.bak")
+                cfg_file.replace(bak)
+                _state["config_error"] = f"配置损坏已备份为 {bak.name}，未自动改写"
+            except OSError:
+                _state["config_error"] = "配置损坏且无法备份，已放弃写回"
+            return
+    else:
+        data = {}
+    if data.get("my_player_id") == player_id:
+        return
+    data["my_player_id"] = player_id
+    tmp = cfg_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(cfg_file)
+    # 让当前进程后续探测/回填直接用上
+    if isinstance(cfg._d, dict):
+        cfg._d["my_player_id"] = player_id
 
 
 def _watch_loop() -> None:
@@ -47,40 +120,93 @@ def _watch_loop() -> None:
     会话解析器，跨文件共用会串场），入库层 match_id 幂等保证不重不漏。
     """
     global _watcher
+    try:
+        _watch_loop_inner()
+    except Exception as exc:
+        _state["watching"] = False
+        _state["last_error"] = f"watch_died:{type(exc).__name__}"
+    finally:
+        _state["watching"] = False
+
+
+def _watch_loop_inner() -> None:
+    global _watcher
     watchers = [
         LogWatcher(cfg.player_log),
         LogWatcher(cfg.prev_log),
     ]
     _watcher = watchers[0]
-    my_id = cfg.my_player_id or None
-    if my_id is None:
-        # 与 backfill 同源的身份自动探测：没有身份，座位/先后手/对手/胜负
-        # 全都解析不出来（2026-09-06 今日场次残缺的根因）
-        from .backfill import detect_player_id
-        my_id = detect_player_id([p for p in (cfg.player_log, cfg.prev_log) if p.exists()])
-        if my_id:
-            _state["my_player_id"] = my_id
+    # 没有身份时座位/先后手/对手/胜负全都解析不出来。
+    # 启动瞬间日志可能还没 reservedPlayers，或文件被 MTGA 独占，
+    # 因此身份必须可重试，并在拿到后回填到进行中/最近闭合的对局。
+    my_id = _detect_player_id()
+    if my_id:
+        _state["my_player_id"] = my_id
+        _persist_player_id(my_id)
     builders = [SessionBuilder(source="log", my_player_id=my_id)
                 for _ in watchers]
     conn = get_conn()
     pending_matches: list = []
     pending_ranks: list = []
+    last_detect_attempt = 0.0
+    _state["watching"] = True
+
+    def ensure_identity() -> None:
+        nonlocal my_id, last_detect_attempt
+        if my_id:
+            return
+        now = time.time()
+        # 日志轮换/客户端刚启动时 reservedPlayers 出现较晚，10s 重试足够
+        if now - last_detect_attempt < 10:
+            return
+        last_detect_attempt = now
+        found = _detect_player_id()
+        if not found:
+            return
+        my_id = found
+        _state["my_player_id"] = my_id
+        _persist_player_id(my_id)
+        for sb in builders:
+            sb.set_player_id(my_id)
 
     def flush() -> None:
-        """take 走各 builder 缓冲，失败时保留 pending 下轮重试（不丢数据）。"""
+        """take 走各 builder 缓冲；每条 SAVEPOINT，失败只回滚该条（R11.3/H2）。"""
         for sb in builders:
             r = sb.take()
             pending_matches.extend(r.matches)
             pending_ranks.extend(r.ranks)
         for m in pending_matches:
-            store.upsert_match(conn, m, cfg)
+            try:
+                conn.execute("SAVEPOINT upsert_one")
+                store.upsert_match(conn, m, cfg)
+                conn.execute("RELEASE SAVEPOINT upsert_one")
+            except Exception as exc:
+                _state["dropped_matches"] = _state.get("dropped_matches", 0) + 1
+                _state["last_drop"] = f"{type(exc).__name__}:{m.match_id}"
+                try:
+                    conn.execute("ROLLBACK TO SAVEPOINT upsert_one")
+                    conn.execute("RELEASE SAVEPOINT upsert_one")
+                except sqlite3.Error:
+                    pass
         for snap in pending_ranks:
-            store.insert_rank(conn, snap)
+            try:
+                conn.execute("SAVEPOINT insert_rank")
+                store.insert_rank(conn, snap)
+                conn.execute("RELEASE SAVEPOINT insert_rank")
+            except Exception as exc:
+                _state["dropped_ranks"] = _state.get("dropped_ranks", 0) + 1
+                _state["last_drop"] = type(exc).__name__
+                try:
+                    conn.execute("ROLLBACK TO SAVEPOINT insert_rank")
+                    conn.execute("RELEASE SAVEPOINT insert_rank")
+                except sqlite3.Error:
+                    pass
         conn.commit()
         pending_matches.clear()
         pending_ranks.clear()
 
-    while True:
+    while not _stop_event.is_set():
+        ensure_identity()
         got = 0
         for w, sb in zip(watchers, builders):
             try:
@@ -97,9 +223,12 @@ def _watch_loop() -> None:
                 _state["last_success_at"] = int(time.time()*1000)
                 _state["last_error"] = None
             except Exception as exc:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
                 _state["last_error"] = type(exc).__name__
-        time.sleep(2)
+        _stop_event.wait(2)
 
 
 def _cards_sync_loop() -> None:
@@ -113,14 +242,18 @@ def _cards_sync_loop() -> None:
     stats_conn = sqlite3.connect(cfg.db_path, check_same_thread=False)
     stats_conn.row_factory = sqlite3.Row
     cards_conn = cards_db_connect(cfg.root / "data" / "mtga_cards.db")
-    while True:
+    while not _stop_event.is_set():
         try:
             ok, total = sync_pending_cards(stats_conn, cards_conn)
             if total:
                 _state["cards_synced"] = _state.get("cards_synced", 0) + ok
         except Exception:
             pass  # 网络失败不杀线程，下个周期重试
-        time.sleep(300)
+        _stop_event.wait(300)
+    try:
+        stats_conn.close()
+    except sqlite3.Error:
+        pass
 
 
 def _boot_tasks() -> None:
@@ -129,36 +262,60 @@ def _boot_tasks() -> None:
     必须放在后台线程：历史日志累积到几百 MB 后全量解析要几十秒，阻塞在
     startup 里会让 uvicorn 迟迟不接受连接，外部健康探测（start.bat）会在
     服务其实正常的情况下误判为「启动失败」。
+
+    R11.3/H1：各阶段错误写入 _state，经 /api/status 可见；失败可 POST
+    /api/retry_boot 重试，不再静默 pass。
     """
     from .backfill import backfill, collect_sources
     from .archive import archive_session_logs
 
     _state["booting"] = True
+    _state["boot_error"] = None
+    _state["boot_stage"] = "archive"
     try:
         archived = archive_session_logs(cfg)  # P0：先归档防丢（客户端会清旧日志）
-        if archived:
-            _state["archived"] = archived
-    except Exception:
-        pass  # 归档失败不阻塞面板启动
+        _state["archived"] = archived or []
+    except Exception as exc:
+        _state["boot_error"] = f"archive:{type(exc).__name__}:{exc}"
+
+    _state["boot_stage"] = "backfill"
     try:
-        backfill(cfg, collect_sources(cfg))
-    except Exception:
-        pass  # 回填失败不阻塞面板启动（库中已有数据仍可看）
-    # Bot 套牌打标（按 config 套牌名模式，幂等）
+        r = backfill(cfg, collect_sources(cfg))
+        _state["boot_backfill"] = {
+            "new": r.get("new"),
+            "updated": r.get("updated"),
+            "stats": r.get("stats"),
+            "files": len(r.get("per_file") or []),
+        }
+    except Exception as exc:
+        prev = _state.get("boot_error")
+        msg = f"backfill:{type(exc).__name__}:{exc}"
+        _state["boot_error"] = f"{prev}; {msg}" if prev else msg
+
+    _state["boot_stage"] = "bot_tags"
     try:
         store.tag_bot_decks(get_conn(), cfg.get("bot_deck_patterns") or [])
-    except Exception:
-        pass
+    except Exception as exc:
+        prev = _state.get("boot_error")
+        msg = f"bot_tags:{type(exc).__name__}:{exc}"
+        _state["boot_error"] = f"{prev}; {msg}" if prev else msg
+
+    _state["boot_stage"] = None
     _state["booting"] = False
+    _state["boot_done_at"] = int(time.time() * 1000)
     # 回填完再挂监听，保持与旧版一致的先后顺序（避免与回填并发写库）
-    if cfg.get("watch_on_start", True):
-        t = threading.Thread(target=_watch_loop, daemon=True)
-        t.start()
-        _state["watching"] = True
+    if cfg.get("watch_on_start", True) and not _stop_event.is_set():
+        global _watcher_thread
+        if _watcher_thread is None or not _watcher_thread.is_alive():
+            t = threading.Thread(target=_watch_loop, daemon=True)
+            t.start()
+            _watcher_thread = t
 
 
 @app.on_event("startup")
 def on_startup() -> None:
+    if getattr(cfg, "config_error", None):
+        _state["config_error"] = cfg.config_error
     # 先让 HTTP 服务立即可用，重活交给后台线程
     threading.Thread(target=_boot_tasks, daemon=True).start()
     if cfg.get("card_sync_enabled", False):
@@ -168,8 +325,16 @@ def on_startup() -> None:
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
-    if _conn is not None:
-        _conn.close()
+    _stop_event.set()
+    t = _watcher_thread
+    if t is not None and t.is_alive():
+        t.join(timeout=5)
+    with _db_lock:
+        if _conn is not None:
+            try:
+                _conn.close()
+            except sqlite3.Error:
+                pass
 
 
 # ---------- API ----------
@@ -183,40 +348,75 @@ def q(fn, *args, **kwargs):
 @app.get("/api/overview")
 def api_overview(exclude_abnormal: bool = True, exclude_bot: bool = True,
                  event: str | None = None, deck: str | None = None,
-                 family: str | None = None):
+                 family: str | None = None,
+                 mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     return q(stats.overview, exclude_abnormal, event, deck, exclude_bot,
-             family=family)
+             family=family, mode=mode)
 
 
 @app.get("/api/matches")
 def api_matches(exclude_abnormal: bool = True, exclude_bot: bool = True,
                 event: str | None = None,
                 deck: str | None = None, limit: int = Query(200, ge=1, le=1000), offset: int = Query(0, ge=0),
-                family: str | None = None, day: str | None = None):
+                family: str | None = None, day: str | None = None,
+                mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     try:
         return q(stats.match_list, exclude_abnormal, event, deck,
                  limit, offset, cfg.get("card_name_lang", "zh"),
-                 exclude_bot, family=family, day=day)
+                 exclude_bot, family=family, day=day, mode=mode)
     except ValueError:
         raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 
 
+@app.get("/api/deck_detail")
+def api_deck_detail(deck: str | None = None, deck_id: str | None = None,
+                    deck_version: str | None = None,
+                    scope: str = "last20", version: str | None = None,
+                    mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$"),
+                    opponent_commander: str | None = None,
+                    observation: str | None = None,
+                    exclude_abnormal: bool = True, exclude_bot: bool = True):
+    """套牌独立详情；身份不受首页赛事／赛制筛选影响。"""
+    from .deck_detail import deck_detail
+    try:
+        return q(deck_detail, deck=deck, deck_id=deck_id,
+                 deck_version=deck_version, scope=scope, version=version,
+                 mode=mode,
+                 opponent_commander=opponent_commander,
+                 observation=observation,
+                 exclude_abnormal=exclude_abnormal, exclude_bot=exclude_bot,
+                 lang=cfg.get("card_name_lang", "zh"), root=cfg.root)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @app.get("/api/mulligans")
 def api_mulligans(exclude_abnormal: bool = True, exclude_bot: bool = True,
-                  event: str | None = None, deck: str | None = None, family: str | None = None):
-    return q(stats.mulligan_stats, exclude_abnormal, exclude_bot, event, deck, family)
+                  event: str | None = None, deck: str | None = None, family: str | None = None,
+                  mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
+    return q(stats.mulligan_stats, exclude_abnormal, exclude_bot, event, deck, family, mode)
 
 
 @app.get("/api/commanders")
 def api_commanders(exclude_abnormal: bool = True, exclude_bot: bool = True,
                    event: str | None = None, deck: str | None = None,
-                   family: str | None = None):
+                   family: str | None = None,
+                   mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     kw = dict(exclude_abnormal=exclude_abnormal, event=event, deck=deck,
-              family=family)
+              family=family, mode=mode)
     rows = q(stats.matchups, root=cfg.root, lang=cfg.get("card_name_lang", "zh"),
              exclude_bot=exclude_bot, **kw)
     coverage = q(stats.commander_coverage, exclude_bot=exclude_bot, **kw)
     return {"rows": rows, "coverage": coverage}
+
+
+@app.get("/api/opponent_types")
+def api_opponent_types(exclude_abnormal: bool = True, exclude_bot: bool = True,
+                       event: str | None = None, deck: str | None = None,
+                       family: str | None = None,
+                       mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
+    return q(stats.opponent_type_stats, exclude_abnormal, exclude_bot,
+             event, deck, family, mode)
 
 
 @app.get("/api/rank_curve")
@@ -231,7 +431,8 @@ def api_rank_curve(track: str = "constructed"):
 def api_export(type: str = "matches", exclude_abnormal: bool = True,
                exclude_bot: bool = False,
                event: str | None = None, deck: str | None = None,
-               family: str | None = None):
+               family: str | None = None,
+               mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     """CSV 导出（UTF-8 BOM，Excel 直接打开不乱码）。type: matches | ranks。"""
     import csv
     import io
@@ -240,7 +441,7 @@ def api_export(type: str = "matches", exclude_abnormal: bool = True,
     if type not in ("matches", "ranks"):
         type = "matches"
     headers, rows = q(stats.export_rows, type, exclude_abnormal, event, deck,
-                      exclude_bot, family=family)
+                      exclude_bot, family=family, mode=mode)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(headers)
@@ -256,31 +457,36 @@ def api_export(type: str = "matches", exclude_abnormal: bool = True,
 
 @app.get("/api/filters")
 def api_filters(exclude_abnormal: bool = True, exclude_bot: bool = True,
-                event: str | None = None, family: str | None = None):
+                event: str | None = None, family: str | None = None,
+                deck: str | None = None,
+                mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     return q(stats.filter_options, exclude_abnormal, exclude_bot, event,
-             family)
+             family, mode, deck)
 
 
 @app.get("/api/targeting")
 def api_targeting(window: str = "30", exclude_abnormal: bool = True,
                   exclude_bot: bool = True, event: str | None = None,
-                  deck: str | None = None, family: str | None = None):
+                  deck: str | None = None, family: str | None = None,
+                  mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     """被针对指数（§3.5）。window: 7 | 30 | all。"""
     days = None if window == "all" else (
         7 if window == "7" else 30)
     def _calc(conn):
         return stats.targeting_index(conn, cfg, days, exclude_abnormal,
-                                     exclude_bot, root=cfg.root, event=event, deck=deck, family=family)
+                                     exclude_bot, root=cfg.root, event=event, deck=deck, family=family,
+                                     mode=mode)
     return q(_calc)
 
 
 @app.get("/api/daily")
 def api_daily(day: str | None = None, exclude_abnormal: bool = True,
               exclude_bot: bool = True, event: str | None = None,
-              deck: str | None = None, family: str | None = None):
+              deck: str | None = None, family: str | None = None,
+              mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     from .insights import daily_report
     try:
-        return q(daily_report, day, exclude_abnormal, exclude_bot, event, deck, family)
+        return q(daily_report, day, exclude_abnormal, exclude_bot, event, deck, family, mode)
     except ValueError:
         raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 
@@ -288,12 +494,36 @@ def api_daily(day: str | None = None, exclude_abnormal: bool = True,
 @app.get("/api/status")
 def api_status():
     def _get(conn):
-        return {"db": store.stats(conn), "watching": _state["watching"],
-                "booting": _state.get("booting", False),
-                "last_events": _state["last_events"], "port": cfg.port,
-                "last_success_at": _state.get("last_success_at"),
-                "last_error": _state.get("last_error")}
+        return {
+            "db": store.stats(conn),
+            "watching": _state["watching"],
+            "booting": _state.get("booting", False),
+            "boot_stage": _state.get("boot_stage"),
+            "boot_error": _state.get("boot_error"),
+            "boot_backfill": _state.get("boot_backfill"),
+            "boot_done_at": _state.get("boot_done_at"),
+            "config_error": _state.get("config_error") or getattr(cfg, "config_error", None),
+            "last_events": _state["last_events"],
+            "port": cfg.port,
+            "last_success_at": _state.get("last_success_at"),
+            "last_error": _state.get("last_error"),
+            "my_player_id": _state.get("my_player_id") or cfg.my_player_id or None,
+            "identity_ready": bool(_state.get("my_player_id") or cfg.my_player_id),
+            "dropped_matches": _state.get("dropped_matches", 0),
+            "last_drop": _state.get("last_drop"),
+        }
     return q(_get)
+
+
+@app.post("/api/retry_boot")
+def api_retry_boot():
+    """启动归档/回填失败后的手动重试入口（幂等，可重复调用）。"""
+    if _state.get("booting"):
+        return {"ok": False, "error": "启动任务仍在进行中"}
+    if not _state.get("boot_error"):
+        return {"ok": True, "skipped": True, "message": "上次启动无错误"}
+    threading.Thread(target=_boot_tasks, daemon=True).start()
+    return {"ok": True, "message": "已重新启动归档/回填"}
 
 
 @app.post("/api/opp_tag_by_name")
@@ -358,10 +588,25 @@ def api_deck_tag(match_id: str = Query(...), tag: str = Query("")):
 def api_opp_tag(match_id: str = Query(...), tag: str = Query("")):
     """手动打标对手卡组类型。
 
-    沉淀规则：写入 opponent_profiles.archetype_user，并回填该主将名下
-    全部历史对局（同主将共享一个档案）。tag 为空 = 清除打标。
+    明确的非主将构筑赛事只修改指定对局；争锋赛事继续写入主将档案，
+    并回填同主将历史记录。tag 为空 = 清除打标。
     """
     def _set(conn):
+        if tag not in stats.ARCH_KEYS + [""]:
+            return {"ok": False, "error": f"非法类型：{tag}"}
+        match = conn.execute(
+            "SELECT match_id,event_id FROM matches WHERE match_id=?", (match_id,)
+        ).fetchone()
+        if match is None:
+            return {"ok": False, "error": "找不到这场对局"}
+        if stats.is_constructed_opponent_event(match["event_id"]):
+            conn.execute("UPDATE matches SET opp_archetype_tag=? WHERE match_id=?",
+                         (tag or None, match_id))
+            conn.commit()
+            return {"ok": True, "match_id": match_id, "tag": tag or None,
+                    "scope": "match"}
+        if "Brawl" not in (match["event_id"] or ""):
+            return {"ok": False, "error": "该赛事不适用构筑对手类型标签"}
         row = conn.execute(
             """SELECT COALESCE(cards.name, 'grpId:' || c.grp_id) name
                FROM commanders c
@@ -373,9 +618,6 @@ def api_opp_tag(match_id: str = Query(...), tag: str = Query("")):
         if row is None:
             return {"ok": False, "error": "该对局无对手主将记录"}
         name = row["name"]
-        valid = stats.ARCH_KEYS + [""]
-        if tag not in valid:
-            return {"ok": False, "error": f"非法类型：{tag}"}
         conn.execute(
             """INSERT INTO opponent_profiles(commander_name, archetype_user, updated_at)
                VALUES(?,?,strftime('%s','now'))

@@ -1,6 +1,8 @@
 """当天事实评语：固定优先级，不依赖历史，不评价平台意图或玩家技术。"""
 from collections import defaultdict
 
+from .deck_observations import play_draw_streak_observations
+
 
 def highlights(rows):
     if not rows:
@@ -15,17 +17,37 @@ def highlights(rows):
         result += f"，{unknown} 场结果待确认"
     candidates = []
 
-    def add(kind, text, evidence, denominator):
+    def add(kind, text, evidence, denominator, **extra):
         candidates.append({'kind': kind, 'text': text+'。', 'n': len(evidence),
-                           'denominator': denominator, 'match_ids': [r['match_id'] for r in evidence]})
+                           'denominator': denominator,
+                           'match_ids': [r['match_id'] for r in evidence], **extra})
 
     known = [r for r in rows if r['play_draw'] in ('play', 'draw')]
-    # 优先级：单场描述 → 全同先后手 → 重复主将 → 第四胜 → 后手胜场 → 普通战绩。
+    # 优先级：单场描述 → 罕见连续先后手 → 全同先后手 → 重复主将 → 第四胜 → 后手胜场 → 普通战绩。
     if n == 1:
         pd = {'play': '先手', 'draw': '后手'}.get(rows[0]['play_draw'], '先后手未记录')
         add('single', result+f"，{pd}", rows, n)
         return candidates
-    if len(known) >= 3 and len({r['play_draw'] for r in known}) == 1:
+    streak_items = play_draw_streak_observations(rows)
+    for item in streak_items:
+        side = '先手' if item['key'] == 'streak-play' else '后手'
+        probability = item['probability']
+        evidence_ids = set(item['match_ids'])
+        evidence = [row for row in rows if row['match_id'] in evidence_ids]
+        if item['n'] == n and len(known) == n:
+            text = (f"这一天 {n} 场全部{side}，连成连续 {item['n']} 把{side}："
+                    f"{item['headline'].split('：', 1)[1]}；按当天范围扫描的 50% 参考概率约 "
+                    f"{probability['scan_percent']}%")
+        elif item['n'] == len(known) and len(known) < n and len({r['play_draw'] for r in known}) == 1:
+            text = (f"这一天 {n} 场中，{len(known)} 场已知记录连成连续 {item['n']} 把{side}，"
+                    f"另 {n-len(known)} 场先后手未记录：{item['headline'].split('：', 1)[1]}；"
+                    f"按可确认记录段扫描的 50% 参考概率约 {probability['scan_percent']}%")
+        else:
+            text = (f"这一天最长连续 {item['n']} 把{side}：{item['headline'].split('：', 1)[1]}；"
+                    f"按当天范围扫描的 50% 参考概率约 {probability['scan_percent']}%")
+        add('play_draw_streak', text, evidence, n,
+            level=item['level'], probability=probability, side=side)
+    if not streak_items and len(known) >= 3 and len({r['play_draw'] for r in known}) == 1:
         pd = '先手' if known[0]['play_draw'] == 'play' else '后手'
         text = (f"这一天已记录的 {n} 场全部{pd}" if len(known)==n else
                 f"这一天 {n} 场中，{len(known)} 场已知记录均为{pd}，另 {n-len(known)} 场未记录先后手")

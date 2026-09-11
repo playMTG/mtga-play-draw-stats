@@ -165,8 +165,9 @@ def build_catalog(source: Path, cards_db: Path, existing: dict | None = None,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, required=True,
-                        help="时间戳快照目录（其中应有 utf8/name）")
+    parser.add_argument("--source", type=Path, default=None,
+                        help="时间戳快照目录（其中应有 utf8/name）；"
+                             "缺省时读 config.json 的 card_names_snapshot")
     parser.add_argument("--cards-db", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--min-stage", type=int, default=5,
@@ -174,6 +175,12 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     cfg = load_config()
+    source = args.source
+    if source is None:
+        snap = str(cfg.get("card_names_snapshot") or "").strip()
+        source = Path(snap) if snap else None
+    if source is None:
+        parser.error("请用 --source 指定快照目录，或在 config.json 设置 card_names_snapshot")
     cards_db = args.cards_db or cfg.root / "data" / "mtga_cards.db"
     output = args.output or cfg.root / "data" / "card_names.catalog.json"
     if not cards_db.is_file():
@@ -182,7 +189,7 @@ def main() -> None:
         existing = json.loads(output.read_text(encoding="utf-8")) if output.exists() else {}
         existing = existing if isinstance(existing, dict) else {}
         catalog, meta = build_catalog(
-            args.source, cards_db, existing=existing, min_stage=args.min_stage
+            source, cards_db, existing=existing, min_stage=args.min_stage
         )
     except (OSError, ValueError, sqlite3.Error) as exc:
         parser.error(str(exc))

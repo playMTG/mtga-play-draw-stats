@@ -51,6 +51,8 @@ class Config:
     def __init__(self, data: dict, root: Path):
         self._d = data
         self.root = root
+        self.config_error: str | None = None
+        self.config_file: Path = root / "config.json"
 
     def __getitem__(self, key):
         return self._d[key]
@@ -138,10 +140,17 @@ class Config:
 
 def load_config(root: Path = REPO_ROOT) -> Config:
     cfg_file = root / "config.json"
-    data = DEFAULTS
+    data = dict(DEFAULTS)
+    error: str | None = None
     if cfg_file.exists():
         try:
             data = _deep_merge(DEFAULTS, json.loads(cfg_file.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError):
-            pass  # 配置损坏时静默回退默认值
-    return Config(data, root)
+        except json.JSONDecodeError as exc:
+            error = f"config.json 不是合法 JSON：{exc}"
+        except OSError as exc:
+            error = f"config.json 无法读取：{exc}"
+    cfg = Config(data, root)
+    # 损坏时保留标记：禁止任何自动写回覆盖原文件（R11.3 / H3）
+    cfg.config_error = error
+    cfg.config_file = cfg_file
+    return cfg

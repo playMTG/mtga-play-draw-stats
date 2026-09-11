@@ -18,17 +18,30 @@ def test_empty_and_single():
 def test_seven_all_play_or_draw():
     for pd, word in [('play','先手'),('draw','后手')]:
         facts=highlights([row(i,pd=pd) for i in range(7)])
-        assert facts[0]['kind']=='same_pd'
+        assert facts[0]['kind']=='play_draw_streak'
         assert f'7 场全部{word}' in facts[0]['text']
+        assert f'连续 7 把{word}' in facts[0]['text']
+        assert facts[0]['level']=='legendary'
+        assert facts[0]['probability']['scan_percent']==0.78
         assert facts[0]['n']==facts[0]['denominator']==7
         assert len(facts)<=2
 
 
 def test_unknown_never_becomes_all_play():
     facts=highlights([row(i,pd='play' if i<4 else None) for i in range(7)])
-    assert '4 场已知记录均为先手' in facts[0]['text']
+    assert '4 场已知记录连成连续 4 把先手' in facts[0]['text']
+    assert '另 3 场先后手未记录' in facts[0]['text']
     assert '7 场全部先手' not in facts[0]['text']
     assert facts[0]['n']==4 and facts[0]['denominator']==7
+
+
+def test_three_draws_are_evaluated_even_when_not_all_matches_are_draws():
+    rows=[row(0,pd='play'),row(1,pd='draw'),row(2,pd='draw'),row(3,pd='draw'),row(4,pd='play')]
+    fact=highlights(rows)[0]
+    assert fact['kind']=='play_draw_streak'
+    assert '连续 3 把后手' in fact['text']
+    assert fact['match_ids']==['1','2','3']
+    assert fact['probability']['scan_percent']==25.0
 
 
 def test_repeated_commander_with_record():
@@ -43,7 +56,7 @@ def test_repeated_commander_with_record():
 
 def test_mixed_formats_and_same_name_do_not_inflate():
     rows=[row(i,pd='draw' if i%2 else 'play',commander='A') for i in range(3)]
-    rows += [row(3,commander='A',event='PremierDraft_TEST'),row(4,commander=None)]
+    rows += [row(3,pd='draw',commander='A',event='PremierDraft_TEST'),row(4,commander=None)]
     fact=highlights(rows)[0]
     assert fact['kind']=='repeat_commander'
     assert fact['n']==3 and fact['denominator']==3

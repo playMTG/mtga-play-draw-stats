@@ -111,7 +111,8 @@ def test_export_ranks(tmp_path):
 def test_export_matches(tmp_path):
     conn, _ = _store(tmp_path)
     headers, rows = stats.export_rows(conn, "matches", exclude_abnormal=False)
-    assert len(headers) == 18
+    assert len(headers) == 19
+    assert "比赛模式" in headers
     assert len(rows) == 1
     r = dict(zip(headers, rows[0]))
     assert r["赛事"] == "Play_Brawl_Historic"

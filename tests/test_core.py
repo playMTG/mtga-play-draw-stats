@@ -220,3 +220,61 @@ def test_zero_turn_match_counts_normally(tmp_path):
     assert r["is_abnormal"] == 0 and r["abnormal_reason"] is None
     conn.close()
     conn2.close()
+
+
+def test_set_player_id_backfills_open_and_last_match():
+    """身份晚到：启动时没有 userId，对局已解析但无座位/胜负；补挂后必须能确认。"""
+    # 无身份：能收到结束原因，但分不清我方 → seat/pd/result 全空
+    sb = SessionBuilder(source="log", my_player_id=None)
+    for t in (fx.match_start("m-late"), fx.turn_info(turn=1, active=1),
+              fx.final_result(winner_match=1), fx.match_completed()):
+        sb.feed(t)
+    closed = sb.take().matches
+    assert len(closed) == 1
+    assert closed[0].my_seat is None
+    assert closed[0].my_result is None
+    assert closed[0].end_reason == "Concede"
+
+    # 进行中的对局（尚无 MatchCompleted）
+    sb.feed(fx.match_start("m-open"))
+    sb.feed(fx.turn_info(turn=1, active=2, ts=fx.T2))
+    assert sb._cur is not None and sb._cur.my_seat is None
+
+    sb.set_player_id(fx.ME)
+    assert sb.my_player_id == fx.ME
+    assert sb._cur.my_seat == 1 and sb._cur.opponent_name == "Opponent"
+    assert sb._last.my_seat == 1
+    # 最近闭合场被标记重发，监听 flush 会带上已补全的座位
+    assert sb._last_revised is True
+    again = sb.take().matches
+    assert any(m.match_id == "m-late" and m.my_seat == 1 for m in again)
+
+
+def test_collect_sources_skips_inaccessible_player_log(tmp_path, monkeypatch):
+    """Player.log 被独占时 Path.exists 可能抛 PermissionError，不得让回填整体失败。"""
+    from app.backfill import collect_sources
+
+    good = tmp_path / "Player-prev.log"
+    good.write_text("x\n", encoding="utf-8")
+    locked = tmp_path / "Player.log"
+    locked.write_text("y\n", encoding="utf-8")
+
+    class _Cfg:
+        root = tmp_path
+        player_log = locked
+        prev_log = good
+
+        def session_log_dirs(self):
+            return []
+
+    original_exists = type(locked).exists
+
+    def boom(self):
+        if self == locked:
+            raise PermissionError(13, "拒绝访问")
+        return original_exists(self)
+
+    monkeypatch.setattr(type(locked), "exists", boom)
+    files = collect_sources(_Cfg())
+    assert good in files
+    assert locked not in files

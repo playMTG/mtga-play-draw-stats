@@ -17,6 +17,9 @@ h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600}
 .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
 input,select,button{font:inherit;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--panel);cursor:pointer}
 button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+button:disabled{cursor:not-allowed;opacity:.5}
+.link-button{padding:0;border:0;background:transparent;color:var(--accent);text-align:left;text-decoration:underline;text-decoration-color:transparent}
+.link-button:hover,.link-button:focus{text-decoration-color:currentColor}
 .grid{display:grid;gap:14px}
 .g2{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
 .g3{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
@@ -46,12 +49,45 @@ tbody tr:hover{background:#f0f4fa}
 .wrap{overflow:auto;max-height:420px;border:1px solid var(--border);border-radius:8px}
 .clip{max-width:180px;overflow:hidden;text-overflow:ellipsis}
 .match-details{display:grid;grid-template-columns:repeat(2,minmax(140px,1fr));gap:3px 14px;white-space:normal;min-width:330px;padding-top:4px}
+.game-list{display:grid;gap:5px;min-width:250px;margin-top:6px}
+.game-row{padding:5px 7px;border-radius:5px;background:#f6f8fa;white-space:normal}
 .match-details span{overflow-wrap:anywhere}
 .status{font-size:12px;color:var(--muted);margin-left:auto}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bbb;margin-right:4px}
 .dot.ok{background:#1a7f5a}
 canvas{max-height:220px}
 abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
+.deck-dialog{width:min(960px,calc(100% - 24px));max-height:calc(100vh - 24px);margin:auto;padding:0;border:1px solid var(--border);border-radius:12px;background:var(--bg);color:var(--text);box-shadow:0 18px 60px rgba(0,0,0,.25);overflow-x:hidden}
+.deck-dialog::backdrop{background:rgba(20,25,32,.48)}
+.deck-dialog-body{padding:18px;min-width:0}
+.deck-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+.deck-dialog-head h2{font-size:20px;color:var(--text);margin:0}
+#deck-close{white-space:nowrap}
+.deck-scope{display:flex;gap:6px;flex-wrap:wrap}
+.deck-scope button{font-size:12px}
+.deck-version-note{margin:8px 0 12px}
+.deck-observation-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:8px}
+.deck-observation{border:1px solid var(--border);border-left:5px solid #8c959f;border-radius:9px;background:var(--panel);padding:12px;white-space:normal}
+.deck-observation.legendary{border-left-color:#d1242f;background:linear-gradient(135deg,#fff1f0,#fff)}
+.deck-observation.rare{border-left-color:#8250df;background:linear-gradient(135deg,#f6f0ff,#fff)}
+.deck-observation.unusual{border-left-color:#bf8700;background:linear-gradient(135deg,#fff8c5,#fff)}
+.deck-observation.strong{border-left-color:#1a7f5a;background:linear-gradient(135deg,#e6f4ee,#fff)}
+.deck-observation h3{font-size:17px;line-height:1.35;margin:0 0 5px}
+.deck-observation p{margin:0 0 6px}
+.deck-observation details{font-size:12px;color:var(--muted);margin-top:5px}
+.deck-observation details p{margin-top:5px}
+.deck-observation-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.summary-list{display:grid;gap:8px}
+.summary-item{border-left:4px solid var(--accent);padding:7px 10px;background:#f4f8ff;border-radius:6px}
+.summary-item strong{display:block;margin-bottom:1px}
+.detail-fold{margin-top:8px}
+.detail-fold>summary{color:var(--muted);font-size:12px;cursor:pointer}
+.detail-fold[open]>summary{margin-bottom:7px}
+#daily-plain.daily-highlight{border-left:5px solid #8c959f;border-radius:8px;padding:10px 12px;background:var(--panel);font-weight:600}
+#daily-plain.daily-highlight.legendary{border-left-color:#d1242f;background:linear-gradient(135deg,#fff1f0,#fff);font-size:17px}
+#daily-plain.daily-highlight.rare{border-left-color:#8250df;background:linear-gradient(135deg,#f6f0ff,#fff);font-size:16px}
+#daily-plain.daily-highlight.unusual{border-left-color:#bf8700;background:linear-gradient(135deg,#fff8c5,#fff)}
+@media(max-width:600px){body{padding:10px}.deck-dialog{width:calc(100% - 12px);max-height:calc(100vh - 12px)}.deck-dialog-body{padding:12px}.match-details{min-width:260px}}
 </style>
 </head>
 <body data-page-node-id="T0EqJ6Bu4yLsD5AffcqGyU">
@@ -61,7 +97,9 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 <div class="bar" data-page-node-id="4w9ccm2SuaNhm0HzbUCPCP">
   <label data-page-node-id="jvY4xgjqeV9lpVmGGmnkzX">赛制 <select id="f-family" data-page-node-id="EfiQbGAqvsPwIHrrV2QXsv"><option value="" data-page-node-id="16UaQNAHrBlqH8QgEWwa1W">全部</option></select></label>
   <label data-page-node-id="uDC6sBxsqcocQyYunFdmWr">赛事 <select id="f-event" data-page-node-id="GuA0fpLkDD2XAX9ZtQySo7"><option value="" data-page-node-id="ECHTm8egDWk9lRRqGBGa4B">全部</option></select></label>
+  <label>比赛模式 <select id="f-mode"><option value="">全部</option></select></label>
   <label data-page-node-id="ntUbzDb8OB5xaTSAVuHapw">套牌 <select id="f-deck" data-page-node-id="2xefbWRgSByuZKPRZR9KF5"><option value="" data-page-node-id="qAtpn4FcGtDa9hoRhHVlKt">全部</option></select></label>
+  <button id="open-filter-deck" disabled>查看套牌详情</button>
   <button id="f-bot" class="on" data-page-node-id="DLKLKhvkLZMPLZD6ApG9VZ">排除 Bot 局</button>
   <button id="btn-export-m" data-page-node-id="Qn5SvldncmBYkZzISRTIBS">导出对局 CSV</button>
   <button id="btn-export-r" data-page-node-id="32xN0cp4omNPvVPSB9ZRZ3">导出段位 CSV</button>
@@ -87,7 +125,16 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <div id="daily-summary" class="grid g3" style="margin:12px 0"></div>
   <div id="daily-pd-streaks" style="margin:12px 0"></div>
   <div id="daily-events"></div>
-  <p id="daily-quality" class="ci" style="margin-top:8px"></p>
+  <section id="daily-history-section" hidden>
+    <h3>分赛事历史变化</h3>
+    <div id="daily-history-lead" class="summary-list"></div>
+    <details id="daily-history-details" class="detail-fold">
+      <summary>查看全部赛事、BO 模式与比较口径</summary>
+      <div id="daily-history-items"></div>
+      <p id="daily-history-note" class="ci"></p>
+    </details>
+  </section>
+  <details id="daily-quality-details" class="detail-fold" hidden><summary id="daily-quality-summary">资料说明</summary><div id="daily-quality" class="ci"></div></details>
 </section>
 <div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
   <div class="card" data-page-node-id="H4tqEqFAufOaHHRs38tXHq"><h2 data-page-node-id="W0EZktdsNNaPaDvKyKLJGZ">全史总胜率</h2><div class="big" id="k-total" data-page-node-id="7C6uaPRoWcROvahQHTbVgJ">–</div><div class="ci" id="k-total-ci" data-page-node-id="MNH8TurE6taBVYpzY3kcIB"></div></div>
@@ -113,16 +160,13 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
     <button id="ti-30" class="ti-btn on" data-page-node-id="JAaiFIE8ZAmvLlavWv2val">近 30 天</button>
     <button id="ti-all" class="ti-btn" data-page-node-id="ID7niFVfdlg0R948lMynQx">全部</button>
   </h2>
-  <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap" data-page-node-id="Lqn56ywlLnpcKpFrpI9hQu">
-    <div style="min-width:130px;text-align:center" data-page-node-id="RImkrpCRAfbwMsmpJacRQb">
-      <div class="big" id="ti-score" data-page-node-id="3giY6itju6c03NvadhHUaf">–</div>
-      <div class="ci" id="ti-label" data-page-node-id="94Y5awlMwpJqt2AmlAH7Je"></div>
-    </div>
-    <div style="flex:1;min-width:300px" id="ti-dims" data-page-node-id="Pgng1I1CuCKlz18llWIEJg"></div>
-  </div>
-  <div class="ci" style="margin-top:6px" data-page-node-id="7DHklNX6sHp7HuymN8B2J1">先后手按首局统计；近 N 天包含今天的 N 个自然日。各维度独立展示，不合成“被针对概率”。</div>
-  <div class="ci" id="ti-nemeses" style="margin-top:8px" data-page-node-id="k778uTXgKnknJz4TGUr1eC"></div>
-  <div class="ci" id="ti-note" style="margin-top:4px" data-page-node-id="zYdCuprNfPszHaiR4HaMGy"></div>
+  <div id="ti-summary" class="summary-list"></div>
+  <details id="ti-details" class="detail-fold">
+    <summary id="ti-details-summary">查看详细分布、资料覆盖与统计口径</summary>
+    <div id="ti-dims"></div>
+    <div class="ci" id="ti-nemeses" style="margin-top:8px"></div>
+    <div class="ci" id="ti-note" style="margin-top:4px"></div>
+  </details>
 </div>
 
 <div class="grid g2" data-page-node-id="bbVs5A2pPGwOieUcKVIDCS">
@@ -148,7 +192,13 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 <div class="wrap" data-page-node-id="JMWgzRk6yebjUSM5lSdSB9"><table id="t-cmdr" data-page-node-id="qv3beE3lTfdWLZDf4IkuXA"><thead data-page-node-id="xVXeZuRypbSb3SrQlnLm1R"><tr data-page-node-id="kE6Pdi5Cy5vB8vmYRkyduR">
     <th data-page-node-id="eTpo7jI3M4SzDTj3rdIGxE">主将</th><th data-page-node-id="aAo5dcQXo8P39Lq4FVYBtg">类型</th><th data-page-node-id="J3yjDSpR61GM1rTFHMf2iH">场次</th><th data-page-node-id="0h9lUHKTqDjkUqaDy0avbv">胜率</th><th data-page-node-id="B4hZzEkXAAdeIQa4Uq9ZOQ">先手</th><th data-page-node-id="p8AgpIqedK14PbjIKKumla">后手</th><th data-page-node-id="3wAbEEEi2sF7f9joFoiBme">打标</th>
   </tr></thead><tbody data-page-node-id="Vk00r5j8xQHLbUcY4N1XMx"></tbody></table></div>
-  <div class="ci" style="margin-top:6px" data-page-node-id="EzGABKY7BQncjHo6B48QNz">类型来源：手动打标 &gt; commander_archetypes.json 先验；手动打标自动沉淀为该主将的固定档案</div>
+  <details class="detail-fold"><summary>主将类型来源</summary><div class="ci">手动打标优先于 commander_archetypes.json 先验；手动打标会沉淀为该主将的固定档案。</div></details>
+</div>
+
+<div class="card" style="margin-top:14px" id="opponent-types-card">
+  <h2>构筑对手类型 <span class="ci" id="opponent-types-summary"></span></h2>
+  <div id="opponent-types-rows" class="summary-list"></div>
+  <div class="ci" id="opponent-types-note"></div>
 </div>
 
 <div class="card" style="margin-top:14px" data-page-node-id="HdlCFRAXVo1RfPPkLnV6qE">
@@ -156,11 +206,50 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <div class="bar"><label>分组 <select id="m-group"><option value="date">时间（默认）</option><option value="event">赛事</option><option value="deck">套牌</option><option value="commander">对手主将</option></select></label>
   <span id="m-day-label" class="ci">全部日期</span><button id="m-all">全部日期</button><button id="m-prev">上一页</button><button id="m-more">下一页</button></div>
   <div class="wrap" style="max-height:520px" data-page-node-id="ymn4s131NX2w1zt2AuMIH3"><table id="t-m" data-page-node-id="HIPQYBr3Z8NX4I7wFmjF9g"><thead data-page-node-id="ujlIBOeHLGQH0Y0KA5r038"><tr data-page-node-id="DRMXJ88SHu8Y803Bdn3mNf">
-    <th data-page-node-id="fs3dlBxOkrjms3DzHDOfP9">时间</th><th data-page-node-id="CE6nTUgLJ9i3GtKAHOCZ7S">赛事</th><th>我的套牌</th><th>我的主将</th><th data-page-node-id="wW5tvVTr9PlOmZMDMxYH2U">先后</th><th data-page-node-id="m1ZNYa05DnC09bNwLczhgD">结果</th>
-    <th data-page-node-id="WdFRktwqhksIiF62XUIIu5">对手</th><th data-page-node-id="sDQPEeR4KpE8GC63iaJzHw">对手主将</th><th>详情</th>
+    <th data-page-node-id="fs3dlBxOkrjms3DzHDOfP9">时间</th><th data-page-node-id="CE6nTUgLJ9i3GtKAHOCZ7S">赛事</th><th>模式／逐局</th><th>我的套牌</th><th>我的主将</th><th data-page-node-id="wW5tvVTr9PlOmZMDMxYH2U">先后</th><th data-page-node-id="m1ZNYa05DnC09bNwLczhgD">结果</th>
+    <th data-page-node-id="WdFRktwqhksIiF62XUIIu5">对手</th><th data-page-node-id="sDQPEeR4KpE8GC63iaJzHw">对手主将／类型</th><th>详情</th>
   </tr></thead><tbody data-page-node-id="Axim8J5XWRqbDLXvwWIZN2"></tbody></table></div>
-    <div class="ci" style="margin-top:6px">主将列只适用于争锋赛事；我方主将仅显示日志主将区或套牌元数据中的明确记录，没有资料时保持“未记录”。</div>
+    <div class="ci" style="margin-top:6px">争锋显示日志中明确记录的主将；明确的非主将构筑赛事可逐场标注对手类型。轮抽、现开和规则未知赛事显示“不适用”，不会算作类型缺失。</div>
 </div>
+
+<dialog id="deck-dialog" class="deck-dialog">
+  <div class="deck-dialog-body">
+    <div class="deck-dialog-head">
+      <div><h2 id="deck-title">套牌详情</h2><p id="deck-identity" class="ci"></p></div>
+      <button id="deck-close" aria-label="关闭套牌详情">关闭</button>
+    </div>
+    <div class="bar">
+      <div id="deck-scope" class="deck-scope" aria-label="套牌详情时间范围">
+        <button data-scope="today">今天</button><button data-scope="yesterday">昨天</button>
+        <button data-scope="last20" class="on">近 20 场</button><button data-scope="last7">近 7 天</button>
+        <button data-scope="all">全部</button>
+      </div>
+      <label>比赛模式 <select id="deck-mode"><option value="">全部</option></select></label>
+      <label>构筑版本 <select id="deck-version"><option value="">全部构筑版本</option></select></label>
+    </div>
+    <p id="deck-loading">选择套牌后读取详情。</p>
+    <div id="deck-summary" class="grid g3" style="margin:12px 0"></div>
+    <section id="deck-observations" hidden>
+      <h2>本范围亮点</h2>
+      <div id="deck-observation-body" class="deck-observation-grid"></div>
+      <p id="deck-observation-note" class="ci deck-version-note"></p>
+    </section>
+    <p id="deck-version-note" class="ci deck-version-note"></p>
+    <div id="deck-commanders" hidden>
+      <h2>对手主将</h2>
+      <p id="deck-commander-coverage"></p>
+      <div id="deck-commander-table" class="wrap" hidden><table><thead><tr>
+        <th>对手主将</th><th>出现占比</th><th>先后手</th><th>交手战绩</th><th>分先后手胜率</th><th>记录</th>
+      </tr></thead><tbody id="deck-commander-body"></tbody></table></div>
+      <p id="deck-commander-note" class="ci deck-version-note"></p>
+    </div>
+    <div id="deck-records" hidden>
+      <h2><span id="deck-record-title">范围内对局</span> <span id="deck-record-count" class="ci"></span>
+        <button id="deck-record-all" class="ti-btn" hidden>恢复全部对局</button></h2>
+      <div class="wrap"><table><thead><tr><th>时间</th><th>赛事</th><th>模式／逐局</th><th>使用名称</th><th>构筑版本</th><th>对手主将／类型</th><th>先后</th><th>结果</th></tr></thead><tbody id="deck-record-body"></tbody></table></div>
+    </div>
+  </div>
+</dialog>
 
 <script src="chart.umd.js"></script>
 <script src="app.js"></script>

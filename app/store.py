@@ -8,7 +8,7 @@ from pathlib import Path
 from .config import Config
 from .events import MatchRecord
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS matches (
   my_seat INTEGER, opponent_name TEXT, opponent_platform TEXT,
   play_draw TEXT, my_result TEXT, end_reason TEXT, total_turns INTEGER,
   my_deck_tag TEXT, my_rank_class TEXT, my_rank_level INTEGER,
-  format_class TEXT,
+  format_class TEXT, match_mode TEXT,
   is_abnormal INTEGER NOT NULL DEFAULT 0, abnormal_reason TEXT,
   opp_archetype_tag TEXT, opp_commander_name TEXT,
   is_bot INTEGER NOT NULL DEFAULT 0);
@@ -90,19 +90,42 @@ def connect(db_path: Path, cards_db_path: Path | None = None) -> sqlite3.Connect
             pass
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
-        "ON CONFLICT(key) DO NOTHING",
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (str(SCHEMA_VERSION),),
     )
     conn.commit()
     return conn
 
 
+def _refresh_match_modes(conn: sqlite3.Connection, match_ids: list[str] | None = None) -> None:
+    """按明确赛事规则与已保存局数刷新比赛模式。"""
+    from .comparisons import match_mode
+    where, args = "", []
+    if match_ids:
+        where = f"WHERE m.match_id IN ({','.join('?' * len(match_ids))})"
+        args = match_ids
+    rows = conn.execute(
+        f"""SELECT m.match_id, m.event_id, m.match_mode, COUNT(DISTINCT g.game_no) game_count
+              FROM matches m LEFT JOIN games g ON g.match_id=m.match_id
+              {where}
+             GROUP BY m.match_id""", args).fetchall()
+    updates = []
+    for row in rows:
+        value = match_mode(row["event_id"], row["game_count"])
+        if row["match_mode"] != value:
+            updates.append((value, row["match_id"]))
+    if updates:
+        conn.executemany("UPDATE matches SET match_mode=? WHERE match_id=?", updates)
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
-    """旧库幂等迁移：is_bot 列（Bot 刷分局标记）、调度 seat 回填。"""
+    """旧库幂等迁移：模式、Bot 标记与调度 seat 回填。"""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
     for col in ("my_deck_id", "my_deck_version"):
         if col not in cols:
             conn.execute(f"ALTER TABLE matches ADD COLUMN {col} TEXT")
+    if "match_mode" not in cols:
+        conn.execute("ALTER TABLE matches ADD COLUMN match_mode TEXT")
     if "is_bot" not in cols:
         conn.execute("ALTER TABLE matches ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0")
         conn.commit()
@@ -112,6 +135,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "UPDATE matches SET is_abnormal = 0, abnormal_reason = NULL "
         "WHERE is_abnormal = 1 OR abnormal_reason IS NOT NULL"
     )
+    _refresh_match_modes(conn)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_matches_mode ON matches(match_mode)")
     conn.commit()
     # 调度记录迁移：kept_on IS NULL 的行是 2026-09-06 前的旧解析产物
     # （decision 未解析、kept_on 全空、Keep/Mulligan 混杂不可区分），直接废弃，
@@ -185,13 +210,14 @@ def upsert_match(conn: sqlite3.Connection, m: MatchRecord, cfg: Config) -> bool:
             end_reason=COALESCE(excluded.end_reason, matches.end_reason),
             total_turns=MAX(COALESCE(excluded.total_turns,0), COALESCE(matches.total_turns,0)),
             is_abnormal=excluded.is_abnormal, abnormal_reason=excluded.abnormal_reason,
-            my_deck_tag=COALESCE(matches.my_deck_tag, excluded.my_deck_tag)
+            my_deck_tag=COALESCE(NULLIF(matches.my_deck_tag,''), excluded.my_deck_tag)
         """,
         (
             m.match_id, m.source, m.event_id, m.start_ms, m.end_ms, duration,
             m.my_seat, m.opponent_name, m.opponent_platform, m.play_draw,
             m.my_result, m.end_reason, m.total_turns or None,
-            is_abnormal, abnormal_reason, m.my_deck_tag,
+            is_abnormal, abnormal_reason,
+            m.my_deck_tag if m.my_deck_tag not in ("", None) else None,
         ),
     )
 
@@ -235,6 +261,7 @@ def upsert_match(conn: sqlite3.Connection, m: MatchRecord, cfg: Config) -> bool:
             "INSERT INTO commanders(match_id, seat, grp_id, partner_idx) VALUES(?,?,?,?)",
             (mid, c["seat"], c["grp_id"], c["partner_idx"]),
         )
+    _refresh_match_modes(conn, [mid])
     return is_new
 
 

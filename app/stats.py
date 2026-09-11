@@ -92,7 +92,7 @@ def _event_scope(event: str | None, family: str | None,
 
 
 def _filters(conn: sqlite3.Connection, event: str | None, deck: str | None,
-             family: str | None = None) -> tuple[list[str], list]:
+             family: str | None = None, mode: str | None = None) -> tuple[list[str], list]:
     conds, args = [], []
     c, a = _event_scope(event, family, conn)
     if c:
@@ -101,14 +101,18 @@ def _filters(conn: sqlite3.Connection, event: str | None, deck: str | None,
     if deck:
         conds.append("COALESCE(my_deck_tag, '') = ?")
         args.append(deck)
+    if mode:
+        conds.append("match_mode = ?")
+        args.append(mode)
     return conds, args
 
 
 def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
              event: str | None = None, deck: str | None = None,
-             exclude_bot: bool = True, family: str | None = None) -> dict:
+             exclude_bot: bool = True, family: str | None = None,
+             mode: str | None = None) -> dict:
     """总览：整体与先后手拆分 + 按赛事/套牌分组 + 趋势（按日）。"""
-    conds, args = _filters(conn, event, deck, family)
+    conds, args = _filters(conn, event, deck, family, mode)
     stat_conds = list(conds)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
@@ -189,6 +193,82 @@ def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
 
 
 ARCH_KEYS = ["Aggro", "Control", "Combo", "Ramp", "Midrange", "Other"]
+
+
+def is_constructed_opponent_event(event_id: str | None) -> bool:
+    """是否适合用非主将构筑的“对手类型”标签。
+
+    只纳入规则明确的排位、自由对战、构组赛及名称明确含 Constructed 的赛事；
+    争锋、轮抽、现开、Momir 等无法确认规则的活动不进入缺失分母。
+    R11.4/M1：补全 MWM AllAccess / Artisan / Pauper 与 Decathlon 构筑项目。
+    """
+    event_id = event_id or ""
+    if not event_id or any(key in event_id for key in ("Brawl", "Draft", "Sealed")):
+        return False
+    if any(key in event_id for key in ("Momir", "Jump_In", "JumpIn", "Cube")):
+        return False
+    if event_family(event_id) in {"排位天梯", "自由对战"}:
+        return True
+    # Decathlon 构筑项目（名称含 Decathlon 且已排除轮抽/现开）
+    if "Decathlon" in event_id:
+        return True
+    # 周中魔法：排除特殊模式后，名称含明确构筑赛制则适用
+    if event_id.startswith("MWM_"):
+        mid = event_id[4:]
+        if any(x in mid for x in ("Momir", "Brawl", "Draft", "Sealed", "Cube",
+                                  "Chaos", "Omniscience")):
+            return False
+        return any(x in mid for x in (
+            "AllAccess", "Artisan", "Pauper", "Standard", "Historic",
+            "Explorer", "Timeless", "Alchemy", "Pioneer", "Shakeup",
+            "Singleton", "Constructed",
+        ))
+    constructed_markers = (
+        "Constructed", "Cons_Event", "Explorer_Event",
+        "Metagame_Challenge", "Standard_Challenge", "Explorer_Challenge",
+        "AllAccess", "HistoricArtisan", "Pauper", "Artisan",
+    )
+    return any(marker in event_id for marker in constructed_markers)
+
+
+def opponent_type_stats(conn: sqlite3.Connection, exclude_abnormal: bool = True,
+                        exclude_bot: bool = True, event: str | None = None,
+                        deck: str | None = None, family: str | None = None,
+                        mode: str | None = None) -> dict:
+    """非主将构筑对局的人工类型覆盖和战绩；未标注不作自动推断。"""
+    conds, args = _filters(conn, event, deck, family, mode)
+    if exclude_abnormal:
+        conds.append("is_abnormal = 0")
+    if exclude_bot:
+        conds.append("is_bot = 0")
+    where = " AND ".join(["1=1"] + conds)
+    candidates = [dict(row) for row in conn.execute(
+        f"""SELECT match_id,event_id,opp_archetype_tag,my_result,play_draw
+              FROM matches WHERE {where}""", args)]
+    eligible = [row for row in candidates if is_constructed_opponent_event(row["event_id"])]
+    tagged = [row for row in eligible if row["opp_archetype_tag"]]
+    rows = []
+    order = {key: i for i, key in enumerate(ARCH_KEYS)}
+    for tag in sorted({row["opp_archetype_tag"] for row in tagged},
+                      key=lambda value: (order.get(value, len(order)), value)):
+        group = [row for row in tagged if row["opp_archetype_tag"] == tag]
+        decided = [row for row in group if row["my_result"] in ("win", "loss")]
+        wins = sum(row["my_result"] == "win" for row in decided)
+        rows.append({
+            "tag": tag, "n": len(group), "wins": wins,
+            "losses": sum(row["my_result"] == "loss" for row in decided),
+            "unknown_result": len(group) - len(decided),
+            "play": sum(row["play_draw"] == "play" for row in group),
+            "draw": sum(row["play_draw"] == "draw" for row in group),
+            "win_rate": wr(wins, len(decided)),
+        })
+    return {
+        "eligible": len(eligible), "known": len(tagged),
+        "unknown": len(eligible) - len(tagged), "rows": rows,
+        "labels": {"Aggro": "快攻", "Control": "控制", "Combo": "组合技",
+                   "Ramp": "Ramp", "Midrange": "中速", "Other": "其他"},
+        "note": "只统计明确的非主将构筑赛事；轮抽、现开、争锋及规则未知赛事不进入分母。类型全部来自逐场人工标注。",
+    }
 ARCH_ZH = {
     "Aggro": "快攻", "Control": "控制", "Combo": "组合技",
     "Ramp": "Ramp", "Midrange": "中速", "Other": "其他",
@@ -227,7 +307,7 @@ def archetype_map(conn: sqlite3.Connection, root) -> dict[str, str]:
 def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
              event: str | None = None, deck: str | None = None,
              root=None, lang: str = "zh", exclude_bot: bool = True,
-             family: str | None = None) -> list[dict]:
+             family: str | None = None, mode: str | None = None) -> list[dict]:
     """对手主将档案：总/先手/后手胜率 + 卡名 + 类型标签。
 
     依赖 store.connect 已 ATTACH 卡名库为 cards_db（缺失时卡名降级为 grpId）。
@@ -249,6 +329,9 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
     if deck:
         conds.append("COALESCE(m.my_deck_tag, '') = ?")
         args.append(deck)
+    if mode:
+        conds.append("m.match_mode = ?")
+        args.append(mode)
     where = " AND ".join(conds)
     # 卡名库可能未挂载（测试库/未运行 update_cards）：动态决定是否 join
     try:
@@ -297,14 +380,14 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
 def commander_coverage(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                        event: str | None = None, deck: str | None = None,
                        exclude_bot: bool = True,
-                       family: str | None = None) -> dict:
+                       family: str | None = None, mode: str | None = None) -> dict:
     """主将档案的样本覆盖率（口径与 matchups 相同的过滤条件）。
 
     背景：主将 grpId 只存在于本地日志的 GRE 事件里，Untapped 云史
     不含对手套牌信息——历史对局大量缺失主将记录，档案场次远小于
     总场次，必须在 UI 上明示，否则"对战 X 才 5 次"会被误读为解析丢数据。
     """
-    conds, args = _filters(conn, event, deck, family)
+    conds, args = _filters(conn, event, deck, family, mode)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
     if exclude_bot:
@@ -318,7 +401,7 @@ def commander_coverage(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         args,
     ).fetchone()
     from .insights import records
-    eligible = [r for r in records(conn, exclude_abnormal, exclude_bot, event, deck, family)
+    eligible = [r for r in records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode)
                 if 'Brawl' in (r['event_id'] or '') and r['my_result'] is not None]
     known = [r for r in eligible if r['commanders']]
     dates = [ts_to_local_str(r['start_time']) for r in known if r['start_time']]
@@ -330,9 +413,10 @@ def commander_coverage(conn: sqlite3.Connection, exclude_abnormal: bool = True,
 def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                event: str | None = None, deck: str | None = None,
                limit: int = 500, offset: int = 0, lang: str = "zh",
-               exclude_bot: bool = True, family: str | None = None, day=None) -> dict:
+               exclude_bot: bool = True, family: str | None = None, day=None,
+               mode: str | None = None) -> dict:
     """对局明细（倒序），含明确记录的我方／对手主将与诊断字段。"""
-    base_conds, base_args = _filters(conn, event, deck, family)
+    base_conds, base_args = _filters(conn, event, deck, family, mode)
     if day:
         datetime.strptime(day, '%Y-%m-%d')
         base_conds.append("date(start_time/1000,'unixepoch','localtime')=?")
@@ -353,6 +437,7 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                    m.opponent_name, m.play_draw, m.my_result, m.end_reason,
                    m.total_turns, m.is_abnormal, m.abnormal_reason, m.is_bot,
                    m.my_deck_tag, m.my_deck_id, m.my_deck_version, m.source,
+                   m.match_mode, m.opp_archetype_tag,
                    (SELECT SUM(mu.kept_on) FROM mulligans mu
                      WHERE mu.match_id=m.match_id
                        AND (mu.seat IS NULL OR mu.seat=m.my_seat)) my_mulls,
@@ -364,6 +449,22 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
             ORDER BY m.start_time DESC LIMIT ? OFFSET ?""",
         [*base_args, limit, offset],
     ).fetchall()
+    games_by_match: dict[str, list[dict]] = {r["match_id"]: [] for r in rows}
+    match_ids = list(games_by_match)
+    for start in range(0, len(match_ids), 500):
+        batch = match_ids[start:start + 500]
+        if not batch:
+            continue
+        game_rows = conn.execute(
+            f"""SELECT match_id, game_no, result, reason, play_draw, duration_sec
+                  FROM games WHERE match_id IN ({','.join('?' * len(batch))})
+                 ORDER BY match_id, game_no""", batch).fetchall()
+        for game in game_rows:
+            games_by_match[game["match_id"]].append({
+                "game_no": game["game_no"], "result": game["result"],
+                "reason": game["reason"], "play_draw": game["play_draw"],
+                "duration_sec": game["duration_sec"],
+            })
     total = conn.execute(
         f"SELECT COUNT(*) c FROM matches m WHERE {where}", base_args
     ).fetchone()["c"]
@@ -398,6 +499,10 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                 "my_deck_id": r["my_deck_id"],
                 "my_deck_version": r["my_deck_version"],
                 "source": r["source"],
+                "match_mode": r["match_mode"] or "未知",
+                "opponent_type_eligible": is_constructed_opponent_event(r["event_id"]),
+                "opp_archetype_tag": r["opp_archetype_tag"],
+                "games": games_by_match.get(r["match_id"], []),
                 "my_mulls": r["my_mulls"],
                 "my_cards": ([names.get(g) for g in (r["my_cmdrs"] or "").split(",") if g]
                              if "Brawl" in (r["event_id"] or "") else []),
@@ -415,8 +520,9 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
 
 def filter_options(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                    exclude_bot: bool = True, event: str | None = None,
-                   family: str | None = None) -> dict:
-    """筛选器候选项（三级级联：赛制大类 → 赛事 → 套牌）。
+                   family: str | None = None, mode: str | None = None,
+                   deck: str | None = None) -> dict:
+    """筛选器候选项（赛制大类 → 赛事 → 比赛模式 → 套牌）。
 
     返回 families / events / decks，每项含 {value, label, n}，按场数降序。
     - families 始终全量（学 Untapped 的 format 粒度）
@@ -448,7 +554,14 @@ def filter_options(conn: sqlite3.Connection, exclude_abnormal: bool = True,
     ]
 
     # 赛事列表：family 收窄
-    events = [r for r in all_events
+    event_mode_where = f"{w} AND match_mode = ?" if mode else w
+    event_mode_args = [mode] if mode else []
+    event_rows = conn.execute(
+        f"SELECT event_id v, COUNT(*) n FROM matches "
+        f"WHERE event_id IS NOT NULL{event_mode_where} GROUP BY event_id",
+        event_mode_args,
+    ).fetchall()
+    events = [r for r in event_rows
               if family is None or event_family(r["v"]) == family]
     events.sort(key=lambda r: (-r["n"], r["v"]))
 
@@ -465,6 +578,9 @@ def filter_options(conn: sqlite3.Connection, exclude_abnormal: bool = True,
             dk_args.extend(ids)
         else:
             dk_cond = " AND 1=0"
+    if mode:
+        dk_cond += " AND match_mode = ?"
+        dk_args.append(mode)
     decks = conn.execute(
         f"SELECT my_deck_tag v, COUNT(*) n FROM matches "
         f"WHERE my_deck_tag IS NOT NULL AND my_deck_tag != ''{w}{dk_cond} "
@@ -472,6 +588,17 @@ def filter_options(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         dk_args,
     ).fetchall()
 
+    # 模式在套牌之前：计数只受上游赛事范围影响，避免下游套牌因模式
+    # 不匹配被重置后，模式选项仍残留旧套牌的数量。
+    mode_conds, mode_args = _filters(conn, event, None, family)
+    if exclude_abnormal:
+        mode_conds.append("is_abnormal = 0")
+    if exclude_bot:
+        mode_conds.append("is_bot = 0")
+    mode_where = " AND ".join(["1=1"] + mode_conds)
+    mode_counts = {row["k"]: row["n"] for row in conn.execute(
+        f"SELECT COALESCE(match_mode,'未知') k, COUNT(*) n FROM matches "
+        f"WHERE {mode_where} GROUP BY k", mode_args)}
     return {
         "families": families,
         "events": [
@@ -479,6 +606,8 @@ def filter_options(conn: sqlite3.Connection, exclude_abnormal: bool = True,
             for r in events
         ],
         "decks": [{"value": r["v"], "label": r["v"], "n": r["n"]} for r in decks],
+        "modes": [{"value": key, "label": key, "n": mode_counts.get(key, 0)}
+                  for key in ("BO1", "BO3", "未知")],
     }
 
 
@@ -541,14 +670,34 @@ def rank_curve(conn: sqlite3.Connection, track: str = "constructed") -> dict:
     return {"track": track, "points": points}
 
 
+def _csv_safe(value):
+    """Excel/Sheets 公式注入防护（R11.5/M2）。
+
+    对手名等外部文本可能以 = + - @ 开头；危险前缀加前置单引号。
+    数字/空值原样返回；去掉控制字符与前后空白后再判断。
+    """
+    if value is None or isinstance(value, (int, float)):
+        return value if value is not None else ""
+    s = str(value)
+    if not s:
+        return ""
+    # 去掉可能绕过前缀检测的控制字符/零宽字符
+    cleaned = "".join(ch for ch in s if ch >= " " or ch in "\t\n\r")
+    cleaned = cleaned.replace("﻿", "").replace("​", "").strip()
+    if cleaned[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + cleaned
+    return cleaned
+
+
 def export_rows(conn: sqlite3.Connection, kind: str = "matches",
                 exclude_abnormal: bool = True,
                 event: str | None = None, deck: str | None = None,
                 exclude_bot: bool = False,
-                family: str | None = None) -> tuple[list[str], list[list]]:
+                family: str | None = None, mode: str | None = None) -> tuple[list[str], list[list]]:
     """CSV 导出数据（kind: matches | ranks）。返回 (表头, 行)。
 
     exclude_abnormal / exclude_bot 仅作行过滤；导出列原样保留标记字段。
+    文本单元格经 _csv_safe，防止 Excel 公式注入。
     """
     if kind == "ranks":
         rows = conn.execute(
@@ -560,15 +709,15 @@ def export_rows(conn: sqlite3.Connection, kind: str = "matches",
         for r in rows:
             out.append([
                 ts_to_local_str(r["ts"]) or "",
-                r["constructed_class"] or "",
+                _csv_safe(r["constructed_class"] or ""),
                 r["constructed_level"] if r["constructed_level"] is not None else "",
-                r["limited_class"] or "",
+                _csv_safe(r["limited_class"] or ""),
                 r["limited_level"] if r["limited_level"] is not None else "",
             ])
         return headers, out
 
     # matches
-    conds, args = _filters(conn, event, deck, family)
+    conds, args = _filters(conn, event, deck, family, mode)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
     if exclude_bot:
@@ -587,39 +736,41 @@ def export_rows(conn: sqlite3.Connection, kind: str = "matches",
              FROM matches m WHERE {where} ORDER BY m.start_time""",
         args,
     ).fetchall()
-    headers = ["match_id", "来源", "赛事", "时间", "时长(秒)", "对手名",
+    headers = ["match_id", "来源", "赛事", "比赛模式", "时间", "时长(秒)", "对手名",
                "先后手", "结果", "结束原因", "总回合", "异常", "异常原因",
                "我方套牌", "我方主将", "对手类型", "我方调度", "对手主将", "Bot局"]
     out = []
     for r in rows:
         is_brawl = "Brawl" in (r["event_id"] or "")
         out.append([
-            r["match_id"], r["source"], r["event_id"] or "",
+            _csv_safe(r["match_id"]), _csv_safe(r["source"]),
+            _csv_safe(r["event_id"] or ""), _csv_safe(r["match_mode"] or "未知"),
             ts_to_local_str(r["start_time"]) or "",
             r["duration_sec"] if r["duration_sec"] is not None else "",
-            r["opponent_name"] or "",
-            r["play_draw"] or "",
-            r["my_result"] or "",
-            (r["end_reason"] or "").replace("ResultReason_", ""),
+            _csv_safe(r["opponent_name"] or ""),
+            _csv_safe(r["play_draw"] or ""),
+            _csv_safe(r["my_result"] or ""),
+            _csv_safe((r["end_reason"] or "").replace("ResultReason_", "")),
             r["total_turns"] if r["total_turns"] is not None else "",
             "是" if r["is_abnormal"] else "否",
-            r["abnormal_reason"] or "",
-            r["my_deck_tag"] or "",
-            (" // ".join(names.get(g)["name"] for g in (r["my_cmdrs"] or "").split(",") if g)
-             if is_brawl else ""),
-            r["opp_archetype_tag"] or "",
+            _csv_safe(r["abnormal_reason"] or ""),
+            _csv_safe(r["my_deck_tag"] or ""),
+            _csv_safe(" // ".join(names.get(g)["name"] for g in (r["my_cmdrs"] or "").split(",") if g)
+                      if is_brawl else ""),
+            _csv_safe(r["opp_archetype_tag"] or ""),
             r["my_mulls"],
-            (" // ".join(names.get(g)["name"] for g in (r["opp_cmdrs"] or "").split(",") if g)
-             if is_brawl else ""),
+            _csv_safe(" // ".join(names.get(g)["name"] for g in (r["opp_cmdrs"] or "").split(",") if g)
+                      if is_brawl else ""),
             "是" if r["is_bot"] else "否",
         ])
     return headers, out
 
 
 def mulligan_stats(conn: sqlite3.Connection, exclude_abnormal: bool = True,
-                   exclude_bot: bool = True, event=None, deck=None, family=None) -> dict:
+                   exclude_bot: bool = True, event=None, deck=None, family=None,
+                   mode=None) -> dict:
     """调度统计：我的每局调度次数分布 + 调度与胜负关联。"""
-    conds, args = _filters(conn, event, deck, family)
+    conds, args = _filters(conn, event, deck, family, mode)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
     if exclude_bot:
@@ -707,7 +858,8 @@ def _verdict(score: float | None) -> str | None:
 
 
 def targeting_index(conn, cfg=None, window_days=30, exclude_abnormal=True,
-                    exclude_bot=True, root=None, event=None, deck=None, family=None):
+                    exclude_bot=True, root=None, event=None, deck=None, family=None,
+                    mode=None):
     from .insights import targeting
     return targeting(conn, cfg, window_days, exclude_abnormal, exclude_bot,
-                     root, event, deck, family)
+                     root, event, deck, family, mode)

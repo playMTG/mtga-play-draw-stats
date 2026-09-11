@@ -48,7 +48,9 @@ def turn_info(turn=1, active=1, ts=T1, commanders=False):
     )
 
 
-def final_result(ts=T3, winner_match=1, games=((1, "ResultReason_Concede"),)):
+def final_result(ts=T3, winner_match=1, games=((1, "ResultReason_Concede"),),
+                 match_id=None):
+    """真实日志的 finalMatchResult 带 matchId；match_id=None 时模拟旧格式。"""
     entries = [
         '{"scope":"MatchScope_Match","winningTeamId":' + str(winner_match) +
         ',"reason":"ResultReason_Concede"}'
@@ -58,9 +60,22 @@ def final_result(ts=T3, winner_match=1, games=((1, "ResultReason_Concede"),)):
             '{"scope":"MatchScope_Game","winningTeamId":' + str(gwin) +
             ',"reason":"' + greason + '"}'
         )
+    mid = f'"matchId":"{match_id}",' if match_id else ""
     return (
         '[UnityCrossThreadLogger]{"timestamp":"' + ts + '",'
-        '"finalMatchResult":{"resultList":[' + ",".join(entries) + ']}}\n'
+        '"finalMatchResult":{' + mid + '"resultList":[' + ",".join(entries) + ']}}\n'
+    )
+
+
+def game_result(winner=1, match_id=None, ts=T3,
+                reason="ResultReason_Concede"):
+    """BO3 中途：仅 MatchScope_Game（无 MatchScope_Match）。"""
+    mid = f'"matchId":"{match_id}",' if match_id else ""
+    return (
+        '[UnityCrossThreadLogger]{"timestamp":"' + ts + '",'
+        '"finalMatchResult":{' + mid +
+        '"resultList":[{"scope":"MatchScope_Game","result":"ResultType_WinLoss",'
+        '"winningTeamId":' + str(winner) + ',"reason":"' + reason + '"}]}}\n'
     )
 
 
@@ -116,14 +131,19 @@ def bo1_match_lines(match_id="m-001", my_active=1):
 
 
 def bo3_match_lines(match_id="m-bo3"):
-    """BO3：第1局我后手负，第2局换边我先手胜（match 层冗余取第 1 局）"""
+    """BO3：第1局我后手负，第2局换边我先手胜（match 层冗余取第 1 局）。
+
+    中途局结果用仅 MatchScope_Game 的块（与真实日志一致）；
+    MatchScope_Match 只在整场结束时出现。
+    """
     return [
         match_start(match_id),
         turn_info(1, 2, commanders=True),      # 第1局：activePlayer=2，我在 seat1 → 后手
         turn_info(2, 1),
-        final_result(winner_match=1, games=((2, "ResultReason_Concede"),)),  # 第1局对手胜
+        game_result(winner=2, match_id=match_id),  # 第1局对手胜
         turn_info(1, 1),                        # 第2局换边：我先手
         turn_info(2, 2),
-        final_result(winner_match=1, games=((1, "ResultReason_Concede"),)),  # 第2局我胜
+        game_result(winner=1, match_id=match_id),  # 第2局我胜
+        final_result(winner_match=1, games=(), match_id=match_id),  # 整场我胜
         match_completed(),
     ]

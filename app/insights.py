@@ -10,9 +10,10 @@ from .card_names import CardNames
 from .targeting import binom_cdf, chi2_sf, max_loss_streak, p_to_score
 
 
-def records(conn, exclude_abnormal=True, exclude_bot=True, event=None, deck=None, family=None):
+def records(conn, exclude_abnormal=True, exclude_bot=True, event=None, deck=None,
+            family=None, mode=None):
     from .stats import _filters
-    conds, args = _filters(conn, event, deck, family)
+    conds, args = _filters(conn, event, deck, family, mode)
     if exclude_abnormal:
         conds.append("is_abnormal=0")
     if exclude_bot:
@@ -22,7 +23,6 @@ def records(conn, exclude_abnormal=True, exclude_bot=True, event=None, deck=None
         f"SELECT * FROM matches WHERE {where} ORDER BY start_time,match_id", args)]
     # 一次读取子表，避免每场一次 SQL。以 seat 判断我方和对手。
     mulls, cmdrs = {}, {}
-    game_counts = dict(conn.execute('SELECT match_id, COUNT(*) FROM games GROUP BY match_id'))
     from .comparisons import match_mode
     for r in conn.execute("SELECT match_id,seat,kept_on FROM mulligans WHERE kept_on IS NOT NULL"):
         mulls.setdefault(r['match_id'], []).append(dict(r))
@@ -31,7 +31,7 @@ def records(conn, exclude_abnormal=True, exclude_bot=True, event=None, deck=None
         cmdrs.setdefault(r['match_id'], []).append(dict(r))
     for r in rows:
         r['event_label'] = friendly_event(r['event_id'])
-        r['match_mode'] = match_mode(r['event_id'], game_counts.get(r['match_id'], 0))
+        r['match_mode'] = r.get('match_mode') or match_mode(r['event_id'], 0)
         mine = [m['kept_on'] for m in mulls.get(r['match_id'], [])
                 if m['seat'] is None or m['seat'] == r['my_seat']]
         r['mulligan'] = any(x > 0 for x in mine) if mine else None
@@ -78,11 +78,11 @@ def aggregate(rows):
 
 
 def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
-                 event=None, deck=None, family=None):
-    from .stats import event_family, friendly_event
+                 event=None, deck=None, family=None, mode=None):
+    from .stats import event_family, friendly_event, is_constructed_opponent_event
     today = datetime.now().date()
     chosen = datetime.strptime(day, '%Y-%m-%d').date() if day else today
-    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family)
+    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode)
     dated = [r for r in rows if r['start_time'] is not None]
     dates = Counter(datetime.fromtimestamp(r['start_time']/1000).date().isoformat() for r in dated)
     selected = [r for r in dated if datetime.fromtimestamp(r['start_time']/1000).date() == chosen]
@@ -92,14 +92,15 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
         group = [r for r in selected if (r['event_id'] or '') == ev]
         groups.append({'event': ev, 'label': friendly_event(ev), 'family': event_family(ev),
                        **aggregate(group)})
-    from .comparisons import compare
+    from .comparisons import compare, summarize_by_event
     history = [r for r in dated if chosen-timedelta(days=30) <= datetime.fromtimestamp(r['start_time']/1000).date() < chosen]
     comparison = compare(selected, history)
+    history_summary = summarize_by_event(comparison)
     modes = [{'mode': mode, **aggregate([r for r in selected if r['match_mode']==mode])}
              for mode in ('BO1','BO3','未知') if any(r['match_mode']==mode for r in selected)]
     comparison['baseline_window'] = '所选日期之前 30 个自然日（不含当天）'
-    non_command = [r for r in selected if 'Brawl' not in (r['event_id'] or '')]
-    tags = Counter(r['opp_archetype_tag'] for r in non_command if r.get('opp_archetype_tag'))
+    constructed = [r for r in selected if is_constructed_opponent_event(r['event_id'])]
+    tags = Counter(r['opp_archetype_tag'] for r in constructed if r.get('opp_archetype_tag'))
     from .daily_highlights import highlights
     facts = highlights(selected)
     evidence_ids = {mid for fact in facts for mid in fact['match_ids']}
@@ -113,11 +114,12 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
             'highlights': facts,
             'highlight_records': [{k: r[k] for k in ('match_id','start_time','event_id','event_label','my_deck_tag','play_draw','my_result','commander_names','commander_cards')} for r in selected if r['match_id'] in evidence_ids],
             'latest_date': max((d for d in dates if d <= today.isoformat()), default=None),
-            'comparison': comparison, 'modes': modes,
-            'opponent_types': {'known': sum(tags.values()), 'total': len(non_command), 'rows': dict(tags)},
+            'comparison': comparison, 'history_summary': history_summary, 'modes': modes,
+            'opponent_types': {'known': sum(tags.values()), 'total': len(constructed),
+                               'unknown': len(constructed)-sum(tags.values()), 'rows': dict(tags)},
             'dates': [{'date': k, 'n': dates[k]} for k in sorted(dates, reverse=True)],
             'unknown_date': len(rows)-len(dated),
-            'scope': {'event': event, 'deck': deck, 'family': family}}
+            'scope': {'event': event, 'deck': deck, 'family': family, 'mode': mode}}
 
 
 def _dimension(label, n, plain, min_n, p=None):
@@ -140,10 +142,10 @@ def _two_sample(a, n, b, m):
 
 
 def targeting(conn, cfg=None, window_days=30, exclude_abnormal=True, exclude_bot=True,
-              root=None, event=None, deck=None, family=None):
+              root=None, event=None, deck=None, family=None, mode=None):
     from .stats import _ti_cfg
     min_n = int(_ti_cfg(cfg)['min_sample'])
-    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family)
+    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode)
     now = datetime.now()
     # 包含今天的 N 个本地自然日；未知时间不能偷偷落入最近窗口。
     start = datetime.combine(now.date()-timedelta(days=window_days-1), datetime.min.time()) if window_days else None
@@ -204,5 +206,5 @@ def targeting(conn, cfg=None, window_days=30, exclude_abnormal=True, exclude_bot
     return {'window_days': window_days, 'dimensions': dims, 'composite': None,
             'comparison': compare(current, baseline, min_n),
             'label': '分项观察', 'min_sample': min_n, 'nemeses': nemeses[:5],
-            'summary': s, 'scope': {'event':event,'deck':deck,'family':family},
+            'summary': s, 'scope': {'event':event,'deck':deck,'family':family,'mode':mode},
             'disclaimer': '本地统计描述波动，不能判定平台意图。多次查看和比较容易偶遇小 p 值；调度与对手分析需要可比历史。'}

@@ -63,7 +63,9 @@ class LogWatcher:
             self._fp = _Fingerprint(self.path, size, 0)
         elif replaced or size < self._fp.offset:
             # 旧文件若仍以改名形式存在（prev），由调用方决定是否补读；
-            # 先把组装器里未闭合的块兜底产出，再把当前文件当新文件从头读。
+            # 轮换前先 flush 未闭合块，避免跨轮换的尾部 JSON 丢失（R11.3 / M5）。
+            for done in self._asm.flush():
+                yield LineRecord(0, done, self._ts)
             self._asm = RecordAssembler()
             self._ts = None
             self._fp = _Fingerprint(self.path, size, 0)

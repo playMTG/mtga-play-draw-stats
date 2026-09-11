@@ -127,3 +127,17 @@ def test_take_keeps_in_progress_match_alive():
     assert m.my_result == "win"
     assert m.play_draw == "play"
     assert m.end_ms is not None
+
+
+def test_rotation_flushes_incomplete_multiline_block(tmp_path):
+    """R11.3/M5：日志轮换前必须 flush 未闭合 JSON，不得静默丢弃。"""
+    p = tmp_path / "Player.log"
+    p.write_text('{"a":{\n', encoding="utf-8")  # 未闭合块
+    w = LogWatcher(p, poll_sec=0)
+    assert _drain(w) == []  # 未闭合，先不产出
+    # 模拟滚动：文件被替换为更小的新文件
+    p.write_text("new\n", encoding="utf-8")
+    got = _drain(w)
+    assert any('{"a":{' in t for t in got), "轮换时应产出未闭合缓冲"
+    assert any("new" in t for t in got)
+

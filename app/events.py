@@ -80,6 +80,10 @@ def _to_int(v) -> int | None:
 class SessionBuilder:
     """消费一个日志文件（一个 MTGA 会话）的全部行。"""
 
+    _MAX_CLOSED = 30
+    _MAX_PENDING_FMR = 20
+    _MAX_SEEN_RESULTS = 500
+
     def __init__(self, source: str = "log", my_player_id: str | None = None):
         self.source = source
         self.my_player_id = str(my_player_id) if my_player_id else None
@@ -87,14 +91,16 @@ class SessionBuilder:
         self.ranks: list[RankSnapshot] = []
         self.unparsed_lines = 0
         self._cur: MatchRecord | None = None
-        self._games_won: int = 0        # 已收到 MatchScope_Game 结果的局数
         self._game_idx: int = 0         # 当前进度中的局号（0-based）
         self._mull_cnt: int = 0         # 当前沿的调度次数（Keep 时落行并清零）
         self._saw_turn_gt1 = False
+        self._expect_new_game = False   # 刚写入 MatchScope_Game → 下一 turn1 视为新局
         self._idmap: dict[int, dict] = {}
         self._seen_results: set[str] = set()
         self._last: MatchRecord | None = None   # 最近闭合的对局（迟到结果回填目标）
         self._last_revised: bool = False        # _last 在闭合后又被补了数据
+        self._closed_by_id: dict[str, MatchRecord] = {}
+        self._pending_fmr: list[tuple[str, dict]] = []
         self.dirty: bool = False        # 自上次 close 以来是否喂入过内容
         # event -> (name, deck id, fingerprint, explicit CommandZone grpIds)
         self._course_decks: dict[str, tuple] = {}
@@ -143,8 +149,8 @@ class SessionBuilder:
         if self._cur is not None and ts is not None:
             self._cur._last_ts = ts
 
-        # 处理顺序很重要：finalMatchResult 必须先于 MatchCompleted 闭合（常同行出现）；
-        # 若结果块晚于闭合块，_on_final_result 会落到上一场（my_result 尚空）。
+        # 处理顺序：Playing 先建立目标对局，再处理结果（可能迟到）、再闭合。
+        # finalMatchResult 一律按载荷 matchId 路由，不再依赖“当前或上一场”。
         if "MatchGameRoomStateType_Playing" in line:
             self._on_match_start(jsons, ts)
         if "finalMatchResult" in line:
@@ -197,6 +203,7 @@ class SessionBuilder:
                         "seat": m.my_seat, "grp_id": gid, "partner_idx": index,
                     })
         self._cur = m
+        self._drain_pending_fmr()
 
     def _resolve_players(self, m: MatchRecord) -> None:
         mine = None
@@ -216,52 +223,133 @@ class SessionBuilder:
                 m.opponent_platform = p.get("platformId")
                 break
 
-    def _on_final_result(self, jsons: list) -> None:
-        # 优先进行中的对局；否则尝试最近闭合的——finalMatchResult 偶发晚于
-        # MatchCompleted 到达（Brawl 实测），监听线程的 take() 已把缓冲清空，
-        # 必须回填到 _last 并标记，由下轮 take() 重新带上（upsert 幂等）。
-        target = self._cur
-        if target is None:
-            target = self._last
-            if target is not None:
-                self._last_revised = True
-        if target is None:
+    def _remember_closed(self, m: MatchRecord) -> None:
+        self._closed_by_id[m.match_id] = m
+        while len(self._closed_by_id) > self._MAX_CLOSED:
+            oldest = next(iter(self._closed_by_id))
+            if oldest == m.match_id:
+                break
+            del self._closed_by_id[oldest]
+
+    def _find_match_by_id(self, mid: str) -> MatchRecord | None:
+        if self._cur is not None and self._cur.match_id == mid:
+            return self._cur
+        if self._last is not None and self._last.match_id == mid:
+            return self._last
+        return self._closed_by_id.get(mid)
+
+    def _result_dedup_key(self, rid: str, rl: list) -> str:
+        return f"{rid or '?'}:{json.dumps(rl, sort_keys=True, default=str)}"
+
+    def _apply_result_list(self, target: MatchRecord, rl: list) -> None:
+        """把 resultList 写入指定对局；逐局结果落在该场自身尚未有结果的局槽上。"""
+        my_team = target.my_team
+        for entry in rl:
+            scope = entry.get("scope")
+            wt = _to_int(entry.get("winningTeamId"))
+            reason = entry.get("reason")
+            if scope == "MatchScope_Match":
+                if wt is not None and my_team is not None and target.my_result is None:
+                    target.my_result = "win" if wt == my_team else "loss"
+                if reason and target.end_reason is None:
+                    target.end_reason = str(reason).replace("ResultReason_", "")
+            elif scope == "MatchScope_Game":
+                g = None
+                for existing in target.games:
+                    if existing.result is None and existing.reason is None:
+                        g = existing
+                        break
+                if g is None:
+                    g = GameRecord(game_no=len(target.games) + 1)
+                    target.games.append(g)
+                if wt is not None and my_team is not None:
+                    g.result = "win" if wt == my_team else "loss"
+                g.reason = str(reason).replace("ResultReason_", "") if reason else None
+                # 仅影响进行中的对局：一局刚结束，下一 turn1 应开新局
+                # （覆盖「第一局在 turn1 投降、从未见到 turn>1」的 BO3 场景）
+                if target is self._cur:
+                    self._expect_new_game = True
+
+    def _queue_pending_fmr(self, rid: str, fmr: dict) -> None:
+        self._pending_fmr = [(i, f) for i, f in self._pending_fmr if i != rid]
+        self._pending_fmr.append((rid, fmr))
+        if len(self._pending_fmr) > self._MAX_PENDING_FMR:
+            self._pending_fmr.pop(0)
+
+    def _drain_pending_fmr(self) -> None:
+        if not self._pending_fmr:
             return
+        still: list[tuple[str, dict]] = []
+        for rid, fmr in self._pending_fmr:
+            target = self._find_match_by_id(rid)
+            if target is None:
+                still.append((rid, fmr))
+                continue
+            rl = fmr.get("resultList")
+            if isinstance(rl, list):
+                key = self._result_dedup_key(rid, rl)
+                if key not in self._seen_results:
+                    self._apply_result_list(target, rl)
+                    self._seen_results.add(key)
+            if target is self._last:
+                self._last_revised = True
+        self._pending_fmr = still
+
+    def _on_final_result(self, jsons: list) -> None:
+        # 真实日志的 finalMatchResult 带 matchId（2026-09-11 抽样 12/12）。
+        # 结果可能晚于 MatchCompleted，甚至晚于下一场 Playing——必须按 ID 路由，
+        # 绝不能写入“当前或最近一场”。找不到目标时入有上限的待确认队列。
         for d in walk_dicts(jsons):
             fmr = d.get("finalMatchResult")
             if not isinstance(fmr, dict):
                 continue
             rl = fmr.get("resultList")
-            # 内容级去重（id() 会被对象地址复用误判）；键里带 match_id，
-            # 否则同一天多场同结论（如都是 Concede）的结果会互相误判重复
-            key = None
-            if isinstance(rl, list):
-                key = (f"{target.match_id}:"
-                       + json.dumps(rl, sort_keys=True, default=str))
-            if key is None or key in self._seen_results:
+            if not isinstance(rl, list):
                 continue
-            if len(self._seen_results) > 500:
+            rid = str(fmr.get("matchId") or "").strip()
+            if rid:
+                key = self._result_dedup_key(rid, rl)
+                if key in self._seen_results:
+                    continue
+                if len(self._seen_results) > self._MAX_SEEN_RESULTS:
+                    self._seen_results.clear()
+                target = self._find_match_by_id(rid)
+                if target is None:
+                    self._queue_pending_fmr(rid, fmr)
+                    continue
+                self._apply_result_list(target, rl)
+                if target is self._last:
+                    self._last_revised = True
+                self._seen_results.add(key)
+                continue
+
+            # 旧格式（无 matchId）：先解析目标，再用目标 match_id 做去重键，
+            # 避免「同一天多场同结论」被误判为重复；只写给尚未有结果的
+            # 当前/最近闭合对局，不落到已另有胜负的下一场。
+            if self._cur is not None:
+                target = self._cur
+            elif self._last is not None and self._last.my_result is None:
+                target = self._last
+                self._last_revised = True
+            else:
+                target = None
+            if target is None:
+                continue
+            # 进行中的对局允许继续写入 Game 结果（BO3 中途）；
+            # 已有整场胜负的闭合对局不再接受无 ID 的重复块。
+            key = self._result_dedup_key(target.match_id, rl)
+            if key in self._seen_results:
+                continue
+            if len(self._seen_results) > self._MAX_SEEN_RESULTS:
                 self._seen_results.clear()
+            if target is not self._cur and target.my_result is not None:
+                continue
+            self._apply_result_list(target, rl)
+            if target is self._last:
+                self._last_revised = True
             self._seen_results.add(key)
-            my_team = target.my_team
-            for entry in rl:
-                scope = entry.get("scope")
-                wt = _to_int(entry.get("winningTeamId"))
-                reason = entry.get("reason")
-                if scope == "MatchScope_Match":
-                    if wt is not None and my_team is not None and target.my_result is None:
-                        target.my_result = "win" if wt == my_team else "loss"
-                    if reason and target.end_reason is None:
-                        target.end_reason = str(reason).replace("ResultReason_", "")
-                elif scope == "MatchScope_Game":
-                    self._games_won += 1
-                    while len(target.games) < self._games_won:
-                        target.games.append(GameRecord(game_no=len(target.games) + 1))
-                    g = target.games[self._games_won - 1]
-                    if wt is not None and my_team is not None:
-                        g.result = "win" if wt == my_team else "loss"
-                    g.reason = str(reason).replace("ResultReason_", "") if reason else None
-                    # 注意：不在此处重置 _saw_turn_gt1 —— 换局判定只由下一个 turn 1 消费
+
+        self._drain_pending_fmr()
 
     def _on_match_completed(self, ts_ms: int | None) -> None:
         if self._cur is None:
@@ -281,16 +369,19 @@ class SessionBuilder:
                 if isinstance(o, dict) and "instanceId" in o:
                     self._idmap[o["instanceId"]] = o
             # 逐局先后手 + 回合数
+            # turnInfo 实测仅有 turnNumber/activePlayer/phase 等，无局号；
+            # 新局信号：① 已见过 turn>1 再回到 turn1；② 刚写入 MatchScope_Game。
             ti = gsm.get("turnInfo")
             if isinstance(ti, dict):
                 turn_no = _to_int(ti.get("turnNumber")) or 0
                 if turn_no > cur.total_turns:
                     cur.total_turns = turn_no
                 if turn_no == 1:
-                    if self._saw_turn_gt1:  # BO3 新一局
+                    if self._saw_turn_gt1 or self._expect_new_game:
                         self._game_idx += 1
                         self._mull_cnt = 0
                         self._saw_turn_gt1 = False
+                        self._expect_new_game = False
                     while len(cur.games) < self._game_idx + 1:
                         cur.games.append(GameRecord(game_no=len(cur.games) + 1))
                     g = cur.games[self._game_idx]
@@ -384,6 +475,17 @@ class SessionBuilder:
             self._close_current()
         return SessionResult(self.matches, self.ranks, self.unparsed_lines)
 
+    def set_player_id(self, player_id: str | None) -> None:
+        """监听中途才探测到身份时补挂；并回填进行中/最近闭合对局的座位。"""
+        if not player_id or self.my_player_id:
+            return
+        self.my_player_id = str(player_id)
+        if self._cur is not None:
+            self._resolve_players(self._cur)
+        if self._last is not None and self._last.my_seat is None:
+            self._resolve_players(self._last)
+            self._last_revised = True
+
     def take(self) -> SessionResult:
         """监听线程专用：取走已完成的对局/段位并清空缓冲。
 
@@ -414,8 +516,10 @@ class SessionBuilder:
         self._cur = None
         self._last = cur
         self._last_revised = False
-        self._games_won = 0
+        self._remember_closed(cur)
         self._game_idx = 0
         self._mull_cnt = 0
         self._saw_turn_gt1 = False
+        self._expect_new_game = False
         self._idmap = {}
+        self._drain_pending_fmr()

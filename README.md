@@ -41,6 +41,9 @@
 - **统一范围筛选**：赛制大类、赛事、BO 模式与套牌共同作用于首页统计，选项带样本量
 - **CSV 导出**：对局明细 / 段位快照，Excel 直接打开不乱码
 - **中文卡名**：对手主将与卡牌共用本地中英文目录；中文优先、英文可查，并显示译名来源；缺译名的牌面回落英文
+  - 英文卡名**开箱即用**：启动时只读本机已安装客户端的卡牌库（`Raw_CardDatabase_*.mtga`，不联网、不改客户端文件）自动补齐，无需任何配置
+  - 中文译名不在客户端库里，可选两种来源：本地牌名快照导入，或打开 `card_sync_enabled` 联网同步
+  - 页面顶部在缺卡名时会给出提示和一键补齐按钮，不会让你对着一串 `grpId` 猜
 
 ## 快速开始
 
@@ -75,7 +78,7 @@ python -m app.main
 # 浏览器打开 http://127.0.0.1:8765
 ```
 
-首次启动会自动回填全部历史日志并归档历史会话日志（防客户端清理丢失）。
+首次启动会自动回填全部历史日志并归档历史会话日志（防客户端清理丢失）。之后每次启动只处理有变化的日志：没有变化的归档会整份跳过，不再重复解析。
 
 ## 隐私承诺
 
@@ -108,9 +111,15 @@ tests/         合成数据回归测试（合成日志 fixtures，不含真实�
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest tests/ -q          # 运行测试
-python tools/check_privacy.py       # 提交前隐私扫描
+python -m pytest tests/ -q          # 运行测试（含前端脚本，需要 node）
+python tools/check_privacy.py       # 提交前隐私扫描（扫暂存区）
+python tools/check_privacy.py --all # 扫描整个仓库（跳过 gitignore 的本机私有文件）
 ```
+
+`tests/*.cjs` 是 `web/app.js` 的前端断言脚本，已由 `tests/test_frontend_scripts.py` 统一纳入
+`pytest` 收集——没有 node 的环境会自动跳过，不会让测试失败。
+
+隐私扫描的退出码：`0` 通过、`1` 命中敏感内容、`2` 暂存区为空（**不是通过**，请先 `git add`）。
 
 设计文档（日志字段实测依据、统计口径约定、功能清单）见 [docs/DESIGN.md](docs/DESIGN.md)。
 

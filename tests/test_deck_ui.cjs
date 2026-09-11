@@ -14,10 +14,16 @@ const context = vm.createContext({
     ? (row.opp_archetype_tag || '未标') : (cards?.map(card => card.name).join(' / ') || '不适用'),
   encodeURIComponent, decodeURIComponent, JSON,
 });
-vm.runInContext(
-  source.slice(source.indexOf('function deckLink'), source.indexOf('let dailyRequest')),
-  context,
-);
+// 切片哨兵：起点 deckLink，终点用后面第一个无关函数。
+// 必须断言哨兵都能找到——否则 indexOf 返回 -1 会让 slice 把整份源码喂给 vm，
+// 表现为「document is not defined」而在加载阶段静默崩掉（曾因此失效过）。
+const START = 'function deckLink';
+const END = 'function deckJourneyRender';
+const start = source.indexOf(START);
+const end = source.indexOf(END);
+assert.ok(start > 0, `切片起点未找到：${START}`);
+assert.ok(end > start, `切片终点未找到或早于起点：${END}`);
+vm.runInContext(source.slice(start, end), context);
 
 const link = context.deckLink({
   my_deck_tag: '拿杜', my_deck_id: 'deck-1', my_deck_version: 'title-v1:abc',

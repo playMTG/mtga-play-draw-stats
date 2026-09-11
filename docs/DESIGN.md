@@ -185,3 +185,116 @@ API 为 `/api/deck_detail`，身份锚点、时间范围、版本选择和 Bot�
 限赛的比较键为同一原始赛事编号与 BO 模式，确保系列、赛制结构和规则一致；构筑键额外包含我方套牌身份与构筑版本。每项返回当天战绩、可比场数、当天有结果场数、历史样本和差值状态。部分可比时显示 `可比场数/当天场数`；完全不可比时仍输出当天胜负事实。
 
 每日战报首页显示一条变化重点，全部赛事与比较口径收进就近展开区。绝对差值最大的可比赛事作为重点；正负 5 个百分点以内称为“接近”。所有文字明确 30 天只是查找窗口，差值只描述个人记录，不能说明调度、匹配或平台意图。
+
+## R12.1 卡名离线补齐
+
+**问题**：卡名此前只有一个来源 `data/mtga_cards.db`，而它由 Scryfall 同步（`card_sync_enabled` 默认关闭）或社区快照导入（需自备快照）填充。全新解压、未改配置的用户，对手主将全部显示成 `grpId:12345`，与 README 承诺的卡名能力不符。
+
+**来源**：MTGA 客户端自带 `MTGA_Data/Downloads/Raw/Raw_CardDatabase_<hash>.mtga`。扩展名虽是 `.mtga`，实际是标准 SQLite（文件头 `SQLite format 3`）：
+
+```sql
+Cards(GrpId, TitleId, …)
+Localizations_enUS(LocId, Formatted, Loc)   -- LocId = TitleId，Formatted=1 为卡名
+```
+
+它随客户端安装下载，覆盖全部卡牌，因此英文卡名可以完全离线补齐。客户端库不含中文（只有 enUS/ptBR/frFR/itIT/deDE/esES/jaJP/koKR），中文仍走快照导入或 Scryfall——与「中文优先、缺译名回落英文」一致。
+
+**实现**：
+
+- `app/client_cards.py`：定位（`Config.client_raw_dirs()` 从会话日志目录反推 `MTGA_Data/Downloads/Raw`，覆盖官方客户端与 Steam 多库；可用 `log_paths.client_raw_extra` 覆盖）、只读读取（`mode=ro`）、写回本机卡名缓存。只补 `pending_grpids` 缺失的 grpId，不覆盖已有名称。
+- `app/main.py`：回填完成后在 boot 阶段跑一次（保证首次打开页面就有卡名），常驻 `_cards_loop` 每 5 分钟增量补齐；`POST /api/card_names_seed` 供页面手动触发。联网同步仍由 `card_sync_enabled` 决定。
+- 开关：`card_offline_seed` 默认 true，置 false 即完全不触碰客户端目录。
+- 富文本清洗：客户端卡名是 Unity 富文本。`<nobr>` 是排版提示直接去掉；`<sprite … name="arena_a">` 是炼金重平衡的「A-」图标，必须还原成字面量 `A-`，否则同一张牌在客户端叫 `Acererac the Archlich`、在 Scryfall 叫 `A-Acererak the Archlich`，`CardNames.get` 会因英文身份不一致丢弃已有的中文译名目录条目。卡名本身可以含 `&`（`Minsc & Boo, Timeless Heroes`），不能当实体转义。
+- 来源文案：完全无名称时 `name_source` 显示「缺卡名（客户端库与译名库均未命中）」，不再误标「英文回退」。
+
+**配套修正**：`backfill_zh` 增加 `scope` 与 `zh_tried`。前者让后台只查 stats 里出现过的 grpId，后者避免「本就无中文印刷」的卡（如 Arena 专属 A- 编号）每轮重试。同时 `sync_pending_cards` 不再以「本轮拉到过英文」作为中文补全的前提——离线补齐后 pending 为空，旧条件会让中文补全永远不执行。`_curl_json_checked` 区分「明确无此数据」与「网络失败」，只有前者才标记 `zh_tried`。
+
+## R12.2 回填与监听水位线
+
+**问题**：`backfill()` 每次启动重解析全部来源，而 `data/archive/` 只增不减（实测 32 份 / 330 MB，外推每次启动约 43 秒）；`LogWatcher` 又从偏移 0 开始，把 Player.log 与 Player-prev.log 再读一遍。
+
+**规则**：水位线只在「文件自上次记录以来一个字节都没变」时生效。
+
+| 情况 | 行为 |
+|---|---|
+| 身份（dev/ino）一致、`size == 已记录偏移`、`mtime_ns` 一致 | 整份跳过 |
+| 文件变大 / 变小 / 被原地改写（mtime 变化）/ 身份不符 | 从 0 重新解析 |
+
+**为什么不在中途续读**：MTGA 日志有跨行 pretty-printed JSON，中途起点很难保证落在逻辑记录边界上；而且会话解析器是有状态的，错过一场对局的开头会让后续事件失去归属（R11.1 修的正是结果串场）。从 0 重放是幂等的（`match_id` upsert），代价只有那一份文件；真正的大头——不再变化的归档——被完整跳过。这个规则同时保证记录下来的偏移一定落在真实边界上，所以 `resume_offset()` 返回非零时，`LogWatcher` 可以直接从那里继续 tail。
+
+**实现**：
+
+- `app/ingest_marks.py`：`ingest_marks` 表（path 主键 + dev/ino/size/offset/mtime_ns/last_ts）；`IngestMarks.resume_offset()` 返回可安全续读的偏移，`is_unchanged()` 用于跳过。
+- `app/parser.py`：新增 `iter_records_with_offsets()`，在逻辑记录边界上产出字节偏移；`iter_records()` 变为它的薄封装。
+- `app/backfill.py`：逐文件先查水位线，未变化则跳过并计入 `skipped`；只在真正读到内容后落盘。
+- `app/watcher.py`：`LogWatcher(path, start_offset=...)`；新增 `offset` / `last_ts` 只读属性。
+- `app/main.py`：`_watch_loop_inner` 用回填刚记录的偏移接管监听的起点（顺带消掉「Player.log 被解析两遍」）；`save_marks()` **只在 `SessionBuilder.in_progress` 为假时落盘**——半场处记位置会让下次启动错过那一场的开头。
+- `/api/status` 的 `boot_backfill` 增加 `skipped`，启动日志可见跳过了几份。
+
+
+## R12.5 卡名库「已挂载」与「表可用」对齐
+
+**问题**：R12.1 把 `store.connect()` 改成「不管卡名库文件是否存在都 ATTACH」。出发点是好的——全新安装时 `data/mtga_cards.db` 还不存在，它是在启动后才由 `cards_db_connect` 创建的；若因为文件不存在就跳过挂载，主连接此后永远看不到 `cards` 表。
+
+但 SQLite 对不存在的路径是**新建一张空库**再挂载，而 `cards` 表当时还没建。于是出现一个中间态：`cards_db` 挂上了，表却不在。这个窗口在两种情况下并不短暂——客户端卡牌库缺失的机器上可能整个启动期都没有表。
+
+**后果**（实测，修前）：
+
+| 位置 | 是否有保护 | 结果 |
+|---|---|---|
+| `app/main.py:635` 主将档案打标的存在性子查询 | 无 | **接口 500** |
+| `app/main.py:709` 对局打标的 `LEFT JOIN cards_db.cards` | 无 | **接口 500** |
+| `app/stats.py:382` 探针、`app/card_names.py:58`、`app/main.py:643/732`、`app/store.py:88` | 有 `try/except` | 静默降级 |
+
+**修法**：ATTACH 之后**立即**把表补出来，让「已挂载」与「表可用」成为同一步的两种说法，中间态不再存在。
+
+- `app/cards_sync.py`：`_CARDS_SCHEMA` 提升为公开的 `CARDS_SCHEMA`，作为 cards 表结构的**单一事实源**。
+- `app/store.py`：import 该常量并加 `cards_db.` 前缀生成 `_CARDS_TABLE_DDL`；ATTACH 后无条件执行它。只读挂载等场景 `except sqlite3.OperationalError: pass` 降级为仅 grpId。
+- `app/main.py`：新增 `cards_joinable(conn)` 探测，两条原先裸露的路径改为先探测再拼 SQL；无表时退化为纯 grpId 形态。属于纵深防御——建表落地后这个分支在正常启动中不会走到。
+- `tests/test_cards_db_attach.py`：覆盖「ATTACH 后表立即存在」「两条裸露 SQL 形态不抛异常」「store 建出的列与 `cards_sync` 完全一致」。
+
+**为什么用 import 而不是复制 DDL**：卡名表结构会随迭代增加列（M4 加过 `name_zh`，R12.1 加过 `source`/`zh_tried`）。两处各写一份迟早漂移，一旦漂移就会出现「谁先建表谁说了算」的隐蔽 bug。统一从 `cards_sync` 取，测试里断言两边列集合相等。
+
+
+## R12.3 启动期并发安全
+
+**问题**：启动阶段有三处同类的「检查与动作之间存在窗口」，都是并发下才会暴露。
+
+### 1. `get_conn()` 无锁无双检
+
+首屏请求、启动回填线程和监听线程是并发起来的，此前无锁会让两个线程各自 `connect()` 一次，后来者覆盖全局 `_conn`，**先前那个连接连同它的 WAL 句柄被丢在一边却仍被调用方使用**。
+
+**修法**：独立的 `_conn_lock` + 双检。
+
+```python
+if _conn is not None:      # 快路径：已建好直接返回
+    return _conn
+with _conn_lock:
+    if _conn is None:      # 慢路径：只有第一个线程真正建连接
+        _conn = store.connect(...)
+    return _conn
+```
+
+**关键约束：这里不能复用 `_db_lock`。** `q()` 的实现是 `with _db_lock: fn(get_conn(), ...)`——若 `get_conn` 也用 `_db_lock`，就是自锁，所有走 `q()` 的接口会直接挂死。所以初始化单独用一把锁，`tests/test_startup_concurrency.py` 里专门有一条用例守着这个死锁。
+
+### 2. `_boot_tasks` 中的 `tag_bot_decks` 在锁外写库
+
+`store.tag_bot_decks(...)` 是写操作，却直接在 `_db_lock` 之外调用，会与 API 的读写撞在一起。修法与紧邻的 cards 阶段保持一致，包进 `with _db_lock:`。
+
+### 3. `/api/retry_boot` 的检查-置位窗口
+
+原实现「先读 `booting` → 起线程」，两次点按之间线程还没跑到置位，就会**起两个回填线程并发写库**。修法是把检查与置位放进同一临界区（`_boot_lock`），置位先生效：
+
+```python
+with _boot_lock:
+    if _state.get("booting"):  return {...仍在进行中}
+    if not _state.get("boot_error"): return {...无错误}
+    _state["booting"] = True   # 先占位，窗口关闭
+threading.Thread(target=_boot_tasks, daemon=True).start()
+```
+
+`_boot_tasks` 自身开头的 `booting = True` 保持幂等，不冲突。
+
+**测试**：`tests/test_startup_concurrency.py` 用 `Barrier` 让 8／6 个线程同时冲进上述路径，断言只建 1 个连接、只起 1 个回填线程；另有一条用源码缩进断言 `tag_bot_decks` 处于锁内。三条关键用例都已用「临时回退修复 → 断言失败 → 还原」验证过不是空转。
+
+

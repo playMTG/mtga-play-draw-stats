@@ -2,6 +2,7 @@
 data/
 config.json
 .workbuddy/
+.workbuddy-ai/
 
 # ---- 运行产物 ----
 *.log

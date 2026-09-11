@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
 import sys
@@ -22,7 +23,13 @@ UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{
 USERID_RE = re.compile(r"\b[A-Z0-9]{20,}\b")
 WINPATH_RE = re.compile(r"C:\\Users\\[^\\\"'\s]+", re.IGNORECASE)
 BAD_EXT = {".db", ".jsonl", ".log"}
-TEXT_EXT = {".py", ".js", ".md", ".json", ".txt", ".html", ".yml", ".yaml", ".toml", ".cfg", ".example"}
+# 会被扫描内容的文本类扩展名。脚本类（.bat/.cmd/.cjs/.ps1/.vbs）也在仓库里，
+# 同样可能夹带用户名或路径，必须一并扫（R12.4）
+TEXT_EXT = {
+    ".py", ".js", ".cjs", ".md", ".json", ".txt", ".html",
+    ".yml", ".yaml", ".toml", ".cfg", ".example",
+    ".bat", ".cmd", ".ps1", ".vbs",
+}
 
 
 def staged_files() -> list[Path]:
@@ -34,8 +41,26 @@ def staged_files() -> list[Path]:
         files = [REPO / f for f in out.splitlines() if f.strip()]
         return [f for f in files if f.exists()]
     except (subprocess.CalledProcessError, FileNotFoundError):
-        # 不在 git 仓库：扫描全部文本文件（跳过 gitignored 顶层目录）
-        skip = {"data", ".workbuddy", ".git", "__pycache__", ".venv", "node_modules"}
+        return all_text_files()
+
+
+def all_text_files() -> list[Path]:
+    """扫描整个仓库（含未跟踪文件），跳过 gitignored 路径。
+
+    用 `git ls-files --cached --others --exclude-standard` 取「未被忽略的
+    已跟踪 + 未跟踪」文件，这样 config.json／data/ 这类本机私有文件不会
+    一直刷屏——它们本来就不会被发布出去。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            cwd=REPO, capture_output=True, text=True, check=True,
+        ).stdout
+        files = [REPO / f for f in out.splitlines() if f.strip()]
+        return [f for f in files if f.is_file()]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        skip = {"data", ".workbuddy", ".workbuddy-ai", ".git", "__pycache__",
+                ".venv", "node_modules", "dist"}
         return [p for p in REPO.rglob("*")
                 if p.is_file() and not (set(p.parts) & skip)]
 
@@ -77,11 +102,19 @@ def scan(files: list[Path]) -> list[str]:
     return problems
 
 
-def main() -> int:
-    files = staged_files()
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="提交前隐私扫描")
+    parser.add_argument("--all", action="store_true",
+                        help="扫描整个仓库（含未跟踪文件），而非仅暂存区")
+    args = parser.parse_args(argv)
+
+    files = all_text_files() if args.all else staged_files()
     if not files:
-        print("隐私扫描：无待提交文件")
-        return 0
+        # 空暂存区不是「通过」：这一句如果和通过共用出口，脚本在 CI 或
+        # 「什么都没 staged」时都会静默绿灯，扫过一个空集合却看起来像扫过了（R12.4）
+        print("⚠️  隐私扫描：暂存区为空，本次没有扫描任何文件")
+        print("    请先 git add 再运行；若要扫描整个仓库，加 --all")
+        return 2
     problems = scan(files)
     if problems:
         print(f"❌ 隐私扫描失败，{len(problems)} 处命中：\n")

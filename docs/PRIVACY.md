@@ -20,6 +20,19 @@
 
 `config.json` 中的 `untapped_import` 段留空时完全不启用。填写后仅在**你主动运行**导入脚本时，从 Untapped 公开 API（untapped.gg，第三方服务）读取你自己的公开档案数据——这是你主动发起的外联，日常面板不自动抓取 Untapped。
 
+## 卡名：默认离线读取本机客户端
+
+`card_offline_seed` 默认开启。面板会**只读**打开你本机已安装的 MTGA 客户端数据文件
+`MTGA_Data/Downloads/Raw/Raw_CardDatabase_*.mtga`，取出英文卡名写进本机缓存
+`data/mtga_cards.db`。该文件实际是 SQLite 数据库，读取过程：
+
+- 不联网、不发起任何请求；
+- 只读打开（`mode=ro`），不修改客户端目录中的任何文件；
+- 只读取卡牌编号与卡名，不读取、也不上传任何对局或个人数据。
+
+关掉 `card_offline_seed` 即完全不触碰客户端数据目录。也可以用它替代：
+`python -m tools.update_cards`（离线补英文名）或 `python -m tools.update_cards --online`（联网补英文与中文）。
+
 ## 可选卡名同步
 
 `python -m tools.import_card_names --source <快照目录>` 只读取指定的本地中英文牌库与本插件的本地卡名库，生成被忽略的 `data/card_names.catalog.json`；不会联网，也不会改写对局。

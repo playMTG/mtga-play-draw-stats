@@ -10,10 +10,10 @@
 
 这是 Windows 本地工具，不需要安装 Git，也不需要注册 GitHub 账号。下载后按下面操作：
 
-1. 打开下载文件夹，找到名称中带 `windows.zip` 的发行包。
+1. 打开下载文件夹，找到名称中带 `windows.zip` 的发行包（当前为 `mtga-play-draw-stats-v0.3.1-windows.zip`）。
 2. 右键压缩包，选择 **“全部解压缩”**。不要直接在压缩包预览窗口里运行文件。
 3. 如果电脑尚未安装 Python，先从 [Python 官网](https://www.python.org/downloads/windows/)下载安装 Python 3.11 或更高版本；安装界面勾选 **Add Python to PATH**。
-4. 打开解压后的 `mtga-play-draw-stats-v0.1.0` 文件夹，双击 **`start.bat`**。
+4. 打开解压后的 `mtga-play-draw-stats-v0.3.1` 文件夹，双击 **`start.bat`**。
 5. 第一次运行会自动准备环境，可能需要半分钟左右；完成后浏览器会自动打开统计面板。
 
 如果上面的直链没有开始下载：进入 [Releases 页面](https://github.com/playMTG/mtga-play-draw-stats/releases/latest)，展开 **Assets**，再点击名称中带 `windows.zip` 的文件。
@@ -114,12 +114,16 @@ pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest tests/ -q          # 运行测试（含前端脚本，需要 node）
 python tools/check_privacy.py       # 提交前隐私扫描（扫暂存区）
 python tools/check_privacy.py --all # 扫描整个仓库（跳过 gitignore 的本机私有文件）
+python tools/make_release_zip.py 0.3.1  # 打发行 ZIP 到 dist/（按 git 跟踪清单打包）
 ```
 
 `tests/*.cjs` 是 `web/app.js` 的前端断言脚本，已由 `tests/test_frontend_scripts.py` 统一纳入
 `pytest` 收集——没有 node 的环境会自动跳过，不会让测试失败。
 
 隐私扫描的退出码：`0` 通过、`1` 命中敏感内容、`2` 暂存区为空（**不是通过**，请先 `git add`）。
+
+发行 ZIP 只按 `git ls-files` 清单打包，因此 `data/`、`config.json`、`.workbuddy*/`、`.venv/`
+等未跟踪内容不会进包。打完包建议先 `python tools/check_privacy.py --all` 确认仓库干净。
 
 设计文档（日志字段实测依据、统计口径约定、功能清单）见 [docs/DESIGN.md](docs/DESIGN.md)。
 

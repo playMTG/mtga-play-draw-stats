@@ -386,8 +386,15 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
     name_base = "cards.name"
     if has_cards and lang == "zh":
         name_base = "COALESCE(cards.name_zh, cards.name)"
-    name_expr = (f"COALESCE({name_base}, '未知 (grpId ' || c.grp_id || ')')"
-                 if has_cards else "'grpId:' || c.grp_id")
+    # 展示名去掉炼金 A- 前缀；统计身份仍是 grpId
+    if has_cards:
+        name_expr = (
+            "COALESCE(CASE WHEN substr({base}, 1, 2) = 'A-' "
+            "THEN substr({base}, 3) ELSE {base} END, "
+            "'未知 (grpId ' || c.grp_id || ')')"
+        ).format(base=name_base)
+    else:
+        name_expr = "'grpId:' || c.grp_id"
     join_sql = ("LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id"
                 if has_cards else "")
     rows = conn.execute(

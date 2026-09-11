@@ -137,14 +137,26 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   </section>
   <details id="daily-quality-details" class="detail-fold" hidden><summary id="daily-quality-summary">资料说明</summary><div id="daily-quality" class="ci"></div></details>
 </section>
-<div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
-  <div class="card" data-page-node-id="H4tqEqFAufOaHHRs38tXHq"><h2 data-page-node-id="W0EZktdsNNaPaDvKyKLJGZ">全史总胜率</h2><div class="big" id="k-total" data-page-node-id="7C6uaPRoWcROvahQHTbVgJ">–</div><div class="ci" id="k-total-ci" data-page-node-id="MNH8TurE6taBVYpzY3kcIB"></div></div>
-  <div class="card"><h2>全史先手率</h2><div class="big" id="k-play-rate">–</div><div class="ci" id="k-play-rate-note"></div></div>
-  <div class="card"><h2>全史后手率</h2><div class="big" id="k-draw-rate">–</div><div class="ci" id="k-draw-rate-note"></div></div>
+<div class="card" style="margin-top:14px" data-page-node-id="HdlCFRAXVo1RfPPkLnV6qE">
+  <h2 data-page-node-id="5D6G08hNtghxgz3AfRTUXJ">对局明细 <span class="ci" id="m-count" data-page-node-id="dmRSFMQnP2ZzHBTduFYVus"></span></h2>
+  <div class="bar">
+    <button id="m-today" class="on">今天</button><button id="m-yesterday">昨天</button>
+    <button id="m-all">全部日期</button>
+    <label>分组 <select id="m-group"><option value="date">时间（默认）</option><option value="event">赛事</option><option value="deck">套牌</option><option value="commander">对手主将</option></select></label>
+    <span id="m-day-label" class="ci"></span>
+    <button id="m-prev">上一页</button><button id="m-more">下一页</button>
+  </div>
+  <div class="wrap" style="max-height:520px" data-page-node-id="ymn4s131NX2w1zt2AuMIH3"><table id="t-m" data-page-node-id="HIPQYBr3Z8NX4I7wFmjF9g"><thead data-page-node-id="ujlIBOeHLGQH0Y0KA5r038"><tr data-page-node-id="DRMXJ88SHu8Y803Bdn3mNf">
+    <th data-page-node-id="fs3dlBxOkrjms3DzHDOfP9">时间</th><th data-page-node-id="CE6nTUgLJ9i3GtKAHOCZ7S">赛事</th><th>我的套牌</th><th>我的主将</th><th data-page-node-id="wW5tvVTr9PlOmZMDMxYH2U">先后</th><th data-page-node-id="m1ZNYa05DnC09bNwLczhgD">结果</th>
+    <th data-page-node-id="WdFRktwqhksIiF62XUIIu5">对手</th><th data-page-node-id="sDQPEeR4KpE8GC63iaJzHw">对手主将</th><th title="来源、调度、结束原因等">…</th>
+  </tr></thead><tbody data-page-node-id="Axim8J5XWRqbDLXvwWIZN2"></tbody></table></div>
+    <div class="ci" style="margin-top:6px">争锋显示日志中明确记录的主将；明确的非主将构筑赛事可逐场标注对手类型。轮抽、现开和规则未知赛事显示“不适用”，不会算作类型缺失。</div>
 </div>
-<div class="grid g2" style="margin-bottom:14px">
-  <div class="card" data-page-node-id="fYcmP68Wq98XGsRc9PXGDR"><h2 data-page-node-id="ORa5dlrWTGzXQiHHHFoZTg">先手时的胜率</h2><div class="big" id="k-play" data-page-node-id="wIztmUWcSEz6Opp2JXStAC">–</div><div class="ci" id="k-play-ci" data-page-node-id="9Wuc57m4US5JA0h2Tvkhn1"></div></div>
-  <div class="card" data-page-node-id="2ewkuBSxDEUoFetCmiWChE"><h2 data-page-node-id="HzlloSE5VO3VqUYXnyGASB">后手时的胜率</h2><div class="big" id="k-draw" data-page-node-id="yolAgRofa8li113YolE7Di">–</div><div class="ci" id="k-draw-ci" data-page-node-id="O061Nu8FBWDWHgWBZbPP4X"></div></div>
+
+<div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
+  <div class="card"><h2>全史总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div></div>
+  <div class="card"><h2>先手率 / 先手胜率</h2><div class="big" id="k-play-rate">–</div><div class="ci" id="k-play-rate-note"></div><div class="ci" id="k-play-ci" style="margin-top:4px"></div></div>
+  <div class="card"><h2>后手率 / 后手胜率</h2><div class="big" id="k-draw-rate">–</div><div class="ci" id="k-draw-rate-note"></div><div class="ci" id="k-draw-ci" style="margin-top:4px"></div></div>
 </div>
 
 <div class="card" style="margin-bottom:14px" data-page-node-id="UN3PNXlDacVJhAPsxiO5r6">
@@ -171,10 +183,8 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </div>
 
 <div class="grid g2" data-page-node-id="bbVs5A2pPGwOieUcKVIDCS">
-  <div class="card" data-page-node-id="Ur6PBsZccXD22pf5dC7pT3"><h2 data-page-node-id="sZrHC2IoyYBtGuXLzH2hQC">先后手胜率对比 <abbr title="误差线为 Wilson 95% 置信区间" data-page-node-id="u7iJIDp9RmnEaXJGG4Z3AM">ⓘ</abbr></h2><canvas id="c-pd" data-page-node-id="jCtjRJodiUPqwip6ZDwM42"></canvas></div>
-  <div class="card" data-page-node-id="UbYps49KInchLK13DZDvHA"><h2 data-page-node-id="MLW6X5dpLJ08rxTffPUpnC">周趋势</h2><canvas id="c-trend" data-page-node-id="agzqgwHHHBDlzK2LADF6vq"></canvas></div>
-  <div class="card" data-page-node-id="pMAygZ19RQr5IRmPFndDtO"><h2 data-page-node-id="tSRjwXGNtTrHOXdUivzybY">按赛事</h2><canvas id="c-event" data-page-node-id="xWZsFbgnKvGIctaspCqDae"></canvas></div>
-  <div class="card" data-page-node-id="UyyNkj578YvJNWDZZplBGI"><h2 data-page-node-id="E6nGOSXWhIjX73AP0X7G4H">调度与胜负</h2><div id="mull-box" data-page-node-id="TmAVOOVNAbHvMC8XLfZmmp"></div></div>
+  <div class="card" data-page-node-id="UbYps49KInchLK13DZDvHA"><h2 data-page-node-id="MLW6X5dpLJ08rxTffPUpnC">周胜率趋势</h2><canvas id="c-trend" data-page-node-id="agzqgwHHHBDlzK2LADF6vq"></canvas></div>
+  <div class="card" data-page-node-id="UyyNkj578YvJNWDZZplBGI"><h2 data-page-node-id="E6nGOSXWhIjX73AP0X7G4H">调度与胜负关联</h2><div id="mull-box" data-page-node-id="TmAVOOVNAbHvMC8XLfZmmp"></div></div>
 </div>
 
 <div class="card" style="margin-top:14px" id="rank-card" data-page-node-id="JNmJrTDiaG1EGipmtzroeJ">
@@ -202,17 +212,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <div class="ci" id="opponent-types-note"></div>
 </div>
 
-<div class="card" style="margin-top:14px" data-page-node-id="HdlCFRAXVo1RfPPkLnV6qE">
-  <h2 data-page-node-id="5D6G08hNtghxgz3AfRTUXJ">对局明细 <span class="ci" id="m-count" data-page-node-id="dmRSFMQnP2ZzHBTduFYVus"></span></h2>
-  <div class="bar"><label>分组 <select id="m-group"><option value="date">时间（默认）</option><option value="event">赛事</option><option value="deck">套牌</option><option value="commander">对手主将</option></select></label>
-  <span id="m-day-label" class="ci">全部日期</span><button id="m-all">全部日期</button><button id="m-prev">上一页</button><button id="m-more">下一页</button></div>
-  <div class="wrap" style="max-height:520px" data-page-node-id="ymn4s131NX2w1zt2AuMIH3"><table id="t-m" data-page-node-id="HIPQYBr3Z8NX4I7wFmjF9g"><thead data-page-node-id="ujlIBOeHLGQH0Y0KA5r038"><tr data-page-node-id="DRMXJ88SHu8Y803Bdn3mNf">
-    <th data-page-node-id="fs3dlBxOkrjms3DzHDOfP9">时间</th><th data-page-node-id="CE6nTUgLJ9i3GtKAHOCZ7S">赛事</th><th>模式／逐局</th><th>我的套牌</th><th>我的主将</th><th data-page-node-id="wW5tvVTr9PlOmZMDMxYH2U">先后</th><th data-page-node-id="m1ZNYa05DnC09bNwLczhgD">结果</th>
-    <th data-page-node-id="WdFRktwqhksIiF62XUIIu5">对手</th><th data-page-node-id="sDQPEeR4KpE8GC63iaJzHw">对手主将／类型</th><th>详情</th>
-  </tr></thead><tbody data-page-node-id="Axim8J5XWRqbDLXvwWIZN2"></tbody></table></div>
-    <div class="ci" style="margin-top:6px">争锋显示日志中明确记录的主将；明确的非主将构筑赛事可逐场标注对手类型。轮抽、现开和规则未知赛事显示“不适用”，不会算作类型缺失。</div>
-</div>
-
 <dialog id="deck-dialog" class="deck-dialog">
   <div class="deck-dialog-body">
     <div class="deck-dialog-head">
@@ -237,7 +236,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
         <thead><tr><th>日期</th><th>场次</th><th>战绩</th><th>先后手</th><th>赛事</th></tr></thead>
         <tbody id="deck-journey-body"></tbody>
       </table></div>
-      <div id="deck-journey-versions" class="summary-list" style="margin-top:10px"></div>
+      <details class="detail-fold" style="margin-top:10px"><summary>构筑版本变更</summary><div id="deck-journey-versions" class="summary-list"></div></details>
     </section>
     <section id="deck-commander-env" hidden>
       <h2>主将环境</h2>
@@ -275,6 +274,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=0.3.1-ui"></script>
 </body>
 </html>

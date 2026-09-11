@@ -3,8 +3,11 @@
 
 const $ = (sel) => sel.includes(" ") ? document.querySelector(sel) : document.getElementById(sel);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function setHTML(id, html) { const el = typeof id === "string" ? $(id) : id; if (el) el.innerHTML = html; }
+function setText(id, text) { const el = typeof id === "string" ? $(id) : id; if (el) el.textContent = text; }
+function setHidden(id, hidden) { const el = typeof id === "string" ? $(id) : id; if (el) el.hidden = !!hidden; }
 const localDay = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-let matchDay = "", matchLimit = 200, matchOffset = 0;
+let matchDay = localDay(new Date()), matchLimit = 200, matchOffset = 0;
 const fmtTime = (ms) =>
   ms ? new Date(ms).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
 const fmtDur = (s) => {
@@ -180,8 +183,12 @@ async function loadOverview() {
     $("k-total-ci").textContent +=
       ` · 另有 ${o.hidden} 场未计入（Bot 局，见下方对局列表）`;
   }
-  bigCard("k-play", "k-play-ci", o.on_play);
-  bigCard("k-draw", "k-draw-ci", o.on_draw);
+  $("k-play-ci").textContent = o.on_play.n
+    ? `先手胜率 ${o.on_play.wr}% · 95% CI ${o.on_play.lo}–${o.on_play.hi} · ${o.on_play.wins}胜/${o.on_play.n}场`
+    : "";
+  $("k-draw-ci").textContent = o.on_draw.n
+    ? `后手胜率 ${o.on_draw.wr}% · 95% CI ${o.on_draw.lo}–${o.on_draw.hi} · ${o.on_draw.wins}胜/${o.on_draw.n}场`
+    : "";
 
   // 先后手局数分布条：直白展示先手/后手各多少场、各占比例
   const pn = o.on_play.n || 0, dn = o.on_draw.n || 0, known = pn + dn;
@@ -200,39 +207,8 @@ async function loadOverview() {
     $("pd-dist-txt").textContent = "";
   }
 
-  // 先后手对比图
-  const hasP = o.on_play.n > 0, hasD = o.on_draw.n > 0;
-  if (pdChart) pdChart.destroy();
-  pdChart = barChart(
-    "c-pd",
-    ["先手", "后手"],
-    [hasP ? o.on_play.wr : 0, hasD ? o.on_draw.wr : 0],
-    [hasP ? o.on_play.lo : 0, hasD ? o.on_draw.lo : 0],
-    [hasP ? o.on_play.hi : 0, hasD ? o.on_draw.hi : 0],
-    ["#c94a3d", "#1a7f5a"]
-  );
-
-  // 周趋势
-  trendChartDraw(o.trend_weekly.slice(-12));
-
-  // 按赛事横向条形图
-  if (eventChart) eventChart.destroy();
-  const ev = o.by_event.slice(0, 8);
-  eventChart = new Chart($("c-event"), {
-    type: "bar",
-    data: {
-      labels: ev.map((r) => r.label || r.key),
-      datasets: [{ data: ev.map((r) => r.wr), backgroundColor: "#5a7db8", borderRadius: 4 }],
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      plugins: { legend: { display: false }, tooltip: { callbacks: {
-        title: items => items.length ? ev[items[0].dataIndex].key : ""
-      } } },
-      scales: { x: { min: 0, max: 100, ticks: { callback: (v) => v + "%" } } },
-    },
-  });
+  // 周趋势（先后手柱状图与上方指标卡重复，已移除；各赛事胜率信息量不足，已移除）
+  if ($("c-trend")) trendChartDraw(o.trend_weekly.slice(-12));
 }
 
 function mulliganView(m) {
@@ -373,8 +349,11 @@ async function tagMatch(matchId, tag, select) {
 
 function cardMarkup(card) {
   if (!card) return "–";
+  // 展示层兜底：炼金 A- 前缀对用户无信息量（后端已剥，旧缓存/异常路径再兜一层）
+  const raw = String(card.name ?? "");
+  const name = raw.replace(/^A-/i, "");
   const hint = [card.name_en, card.name_source, card.key ? `grpId:${card.key}` : ""].filter(Boolean).join(" · ");
-  return `<span title="${esc(hint)}">${esc(card.name)}</span>`;
+  return `<span title="${esc(hint)}">${esc(name)}</span>`;
 }
 function cardsMarkup(cards, fallback = []) {
   return cards?.length ? cards.map(cardMarkup).join(" / ") : esc(fallback.join(" / ") || "–");
@@ -406,15 +385,16 @@ function matchDetails(r) {
 function gameDetails(r) {
   const mode = r.match_mode || "未知";
   const games = r.games || [];
-  if (!games.length) return `<strong>${esc(mode)}</strong><div class="ci">逐局未记录</div>`;
-  const rows = games.map(game => {
-    const playDraw = game.play_draw === "play" ? "先手" : game.play_draw === "draw" ? "后手" : "先后手未知";
-    const result = game.result === "win" ? "胜" : game.result === "loss" ? "负" : "结果待确认";
-    const reason = game.reason ? ` · ${endReasonLabel(game.reason)}` : "";
-    const duration = game.duration_sec == null ? "" : ` · ${fmtDur(game.duration_sec)}`;
-    return `<div class="game-row">第 ${esc(game.game_no ?? "?")} 局 · ${playDraw} · ${result}${esc(reason)}${duration}</div>`;
-  }).join("");
-  return `<strong>${esc(mode)}</strong><details><summary>查看 ${games.length} 局</summary><div class="game-list ci">${rows}</div></details>`;
+  // BO1 不再展开逐局；BO3 用 title 悬停，不占表格行高
+  if (mode === "BO1" || games.length <= 1) {
+    return `<span class="ci">${esc(mode)}</span>`;
+  }
+  const tip = games.map(game => {
+    const playDraw = game.play_draw === "play" ? "先手" : game.play_draw === "draw" ? "后手" : "?";
+    const result = game.result === "win" ? "胜" : game.result === "loss" ? "负" : "?";
+    return `G${game.game_no ?? "?"} ${playDraw} ${result}`;
+  }).join(" · ");
+  return `<span class="ci" title="${esc(tip)}">${esc(mode)}</span>`;
 }
 
 function deckLink(r, label) {
@@ -428,17 +408,23 @@ function deckLink(r, label) {
 }
 
 function matchRow(r) {
-  const ownCommander = r.my_cards?.length || r.my_cmdrs?.length
-    ? cardsMarkup(r.my_cards, r.my_cmdrs) : "未记录";
+  const brawl = (r.event_id || "").includes("Brawl");
+  const ownCommander = brawl
+    ? ((r.my_cards?.length || r.my_cmdrs?.length) ? cardsMarkup(r.my_cards, r.my_cmdrs) : "–")
+    : `<span class="ci" title="非争锋赛制无主将">–</span>`;
+  const oppCell = brawl
+    ? opponentProfileMarkup(r, r.opp_cards)
+    : (r.opp_archetype_tag ? esc(r.opp_archetype_tag) : `<span class="ci">–</span>`);
   return `<tr>
-    <td>${fmtTime(r.start_time)}</td><td>${eventMarkup(r.event_id, r.event_label)}</td>
-    <td>${gameDetails(r)}</td>
+    <td>${fmtTime(r.start_time)}</td>
+    <td>${eventMarkup(r.event_id, r.event_label)} <span class="ci">${gameDetails(r)}</span></td>
     <td class="clip" title="${esc(r.my_deck_tag || "套牌未记录")}">${deckLink(r)}</td>
     <td>${ownCommander}</td>
-    <td>${r.play_draw === "play" ? "先手" : r.play_draw === "draw" ? "后手" : "未知"}</td>
+    <td>${r.play_draw === "play" ? "先手" : r.play_draw === "draw" ? "后手" : "–"}</td>
     <td>${r.my_result === "win" ? "胜" : r.my_result === "loss" ? "负" : "待确认"}</td>
-    <td>${esc(r.opponent_name || "–")}</td><td>${opponentProfileMarkup(r, r.opp_cards)}</td>
-    <td>${matchDetails(r)}</td>
+    <td>${esc(r.opponent_name || "–")}</td>
+    <td>${oppCell}</td>
+    <td title="${esc(`来源 ${sourceLabel(r.source)} · 调度 ${r.my_mulls ?? "?"} · ${endReasonLabel(r.end_reason)} · ${r.match_id || ""}`)}" class="ci">…</td>
   </tr>`;
 }
 
@@ -452,7 +438,7 @@ async function loadMatches() {
   const m = await api("/api/matches", { limit: matchLimit, offset: matchOffset, ...(matchDay ? {day:matchDay} : {}) });
   if (isStale(v)) return;
   $("m-count").textContent = `共 ${m.total} 场（本页 ${m.rows.length} 场，第 ${Math.floor(matchOffset / matchLimit) + 1} 页）`;
-  $("m-day-label").textContent = matchDay || "全部日期";
+  $("m-day-label").textContent = matchDay ? matchDay : "全部日期";
   $("m-more").disabled = matchOffset + m.rows.length >= m.total;
   $("m-prev").disabled = matchOffset === 0;
   const mode = $("m-group").value;
@@ -465,7 +451,7 @@ async function loadMatches() {
     grouped.get(key).push(r);
   }
   $("#t-m tbody").innerHTML = [...grouped].map(([key, rows]) =>
-    `<tr><td colspan="10"><strong>${mode === "event" ? eventMarkup(rows[0].event_id, rows[0].event_label) : mode === "commander" ? cardsMarkup(rows[0].opp_cards, rows[0].opp_cmdrs) : mode === "deck" ? deckLink(rows[0], key) : esc(key)}</strong> · 当前显示 ${rows.length} 场</td></tr>`
+    `<tr><td colspan="9"><strong>${mode === "event" ? eventMarkup(rows[0].event_id, rows[0].event_label) : mode === "commander" ? cardsMarkup(rows[0].opp_cards, rows[0].opp_cmdrs) : mode === "deck" ? deckLink(rows[0], key) : esc(key)}</strong> · 当前显示 ${rows.length} 场</td></tr>`
     + rows.map(matchRow).join("")).join("");
 }
 
@@ -535,18 +521,19 @@ function deckObservationMarkup(observations, selectedKey = "") {
 
 function deckJourneyRender(journey) {
   const sec = $("deck-journey");
+  if (!sec) return;
   if (!journey || !journey.days || !journey.days.length) {
     sec.hidden = true;
     return;
   }
   sec.hidden = false;
   const days = journey.days;
-  $("deck-journey-lead").textContent =
+  setText("deck-journey-lead",
     `共 ${journey.day_count} 个有记录日` +
     (journey.span_days ? `，跨度约 ${journey.span_days} 天` : "") +
     (journey.unknown_day ? `；另 ${journey.unknown_day} 场日期未知未入轴` : "") +
-    "。旅程按当前身份全部记录，不随上方「近 20 场」截断。";
-  $("deck-journey-body").innerHTML = days.map(d => {
+    "。旅程按当前身份全部记录，不随上方「近 20 场」截断。");
+  setHTML("deck-journey-body", days.map(d => {
     const wr = d.win_rate && d.win_rate.wr != null ? `${d.win_rate.wr}%` : "–";
     return `<tr>
       <td><button type="button" class="link-button journey-day" data-day="${esc(d.date)}">${esc(d.date)}</button></td>
@@ -555,29 +542,30 @@ function deckJourneyRender(journey) {
       <td>先 ${d.play} · 后 ${d.draw}${d.unknown_play_draw ? ` · 未 ${d.unknown_play_draw}` : ""}</td>
       <td class="clip" title="${esc((d.events||[]).join("、"))}">${esc((d.events||[]).join("、") || "–")}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="5" class="ci">没有可入轴的日期</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="ci">没有可入轴的日期</td></tr>`);
   const marks = journey.version_marks || [];
-  $("deck-journey-versions").innerHTML = marks.length
-    ? marks.map(m => `<div class="summary-item"><strong>${esc(m.date)}</strong><span>改为构筑 ${esc(String(m.version).slice(0,12))}… → 此后 ${m.n_after} 场（${m.wins} 胜 ${m.losses} 负）</span></div>`).join("")
-    : `<p class="ci">尚未记录到构筑版本变更。</p>`;
+  setHTML("deck-journey-versions", marks.length
+    ? marks.map(m => `<div class="summary-item"><strong>${esc(m.date)}</strong><span>构筑版本变更 → 此后 ${m.n_after} 场（${m.wins} 胜 ${m.losses} 负）</span></div>`).join("")
+    : `<p class="ci">尚未记录到构筑版本变更。</p>`);
 }
 
 
 function deckCommanderEnvRender(env) {
   const sec = $("deck-commander-env");
+  if (!sec) return;
   if (!env || !env.applicable || !(env.rows || []).length) {
     sec.hidden = true;
     return;
   }
   sec.hidden = false;
   const mine = (env.my_commanders || []).map(c => c.name).join(" / ") || "主将未记录";
-  $("deck-commander-env-lead").textContent =
-    `我方主将：${mine} · 对手主将已知 ${env.known}/${env.eligible} 场`;
+  setText("deck-commander-env-lead",
+    `我方主将：${mine} · 对手主将已知 ${env.known}/${env.eligible} 场`);
   const pd = env.play_draw || {};
   const rate = pd.play_rate != null ? `先手率 ${pd.play_rate}%` : "";
-  $("deck-commander-env-pd").textContent =
-    `先后手：先 ${pd.play} · 后 ${pd.draw}${pd.unknown_pd ? ` · 未知 ${pd.unknown_pd}` : ""}${rate ? " · " + rate : ""}`;
-  $("deck-commander-env-body").innerHTML = env.rows.map(row => {
+  setText("deck-commander-env-pd",
+    `先后手：先 ${pd.play} · 后 ${pd.draw}${pd.unknown_pd ? ` · 未知 ${pd.unknown_pd}` : ""}${rate ? " · " + rate : ""}`);
+  setHTML("deck-commander-env-body", env.rows.map(row => {
     const delta = row.delta_pp == null ? "–"
       : `${row.delta_pp > 0 ? "+" : ""}${row.delta_pp} pp`;
     return `<tr>
@@ -590,28 +578,41 @@ function deckCommanderEnvRender(env) {
       <td class="num">${row.on_draw.n ? row.on_draw.wr + "%" : "–"}</td>
       <td><button type="button" class="ti-btn deck-commander-open" data-commander="${esc(row.key)}">查看 ${row.n} 场</button></td>
     </tr>`;
-  }).join("") || `<tr><td colspan="8" class="ci">暂无可列出的对手主将</td></tr>`;
-  $("deck-commander-env-note").textContent = env.note || "";
+  }).join("") || `<tr><td colspan="8" class="ci">暂无可列出的对手主将</td></tr>`);
+  setText("deck-commander-env-note", env.note || "");
 }
 
 async function loadDeckDetail() {
   if (!deckAnchor) return;
   const request = ++deckRequest;
-  $("deck-loading").hidden = false;
-  $("deck-loading").textContent = "正在读取套牌详情…";
-  $("deck-summary").innerHTML = "";
-  $("deck-journey").hidden = true;
-  $("deck-commander-env").hidden = true;
-  $("deck-observations").hidden = true;
-  $("deck-commanders").hidden = true;
-  $("deck-records").hidden = true;
-  const p = new URLSearchParams({scope:deckScope, exclude_bot:String($("f-bot").classList.contains("on"))});
-  for (const key of ["deck", "deck_id", "deck_version"]) if (deckAnchor[key]) p.set(key, deckAnchor[key]);
-  if ($("deck-mode").value) p.set("mode", $("deck-mode").value);
-  if ($("deck-version").value) p.set("version", $("deck-version").value);
-  if (deckCommander) p.set("opponent_commander", deckCommander);
-  if (deckObservation) p.set("observation", deckObservation);
   try {
+    // 不整页清空：切换筛选/依据时保留旧内容，避免对话框“闪一下变空”
+    const loading = $("deck-loading");
+    if (loading) {
+      loading.hidden = false;
+      loading.textContent = "正在更新…";
+    }
+    if (!deckAnchor._loadedOnce) {
+      setHTML("deck-summary", "");
+      setHidden("deck-journey", true);
+      setHidden("deck-commander-env", true);
+      setHidden("deck-observations", true);
+      setHidden("deck-commanders", true);
+      setHidden("deck-records", true);
+    }
+    const p = new URLSearchParams({
+      scope: deckScope,
+      exclude_bot: String(!!$("f-bot")?.classList?.contains?.("on")),
+    });
+    for (const key of ["deck", "deck_id", "deck_version"]) {
+      if (deckAnchor[key]) p.set(key, deckAnchor[key]);
+    }
+    const modeEl = $("deck-mode");
+    if (modeEl && modeEl.value) p.set("mode", modeEl.value);
+    const verEl = $("deck-version");
+    if (verEl && verEl.value) p.set("version", verEl.value);
+    if (deckCommander) p.set("opponent_commander", deckCommander);
+    if (deckObservation) p.set("observation", deckObservation);
     const response = await fetch(`/api/deck_detail?${p}`);
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
@@ -619,48 +620,58 @@ async function loadDeckDetail() {
     }
     const r = await response.json();
     if (request !== deckRequest) return;
-    $("deck-title").textContent = r.title;
+    if (deckAnchor) deckAnchor._loadedOnce = true;
+    setText("deck-title", r.title || "套牌详情");
     const kindLabel = r.deck_kind?.label || "";
-    $("deck-identity").textContent =
+    const aliases = r.identity?.aliases || [];
+    setText("deck-identity",
       (kindLabel ? `【${kindLabel}】 ` : "") +
-      r.identity.note +
-      (r.identity.aliases.length > 1 ? ` 历史名称：${r.identity.aliases.join("、")}。` : "");
+      (r.identity?.note || "") +
+      (aliases.length > 1 ? ` 历史名称：${aliases.join("、")}。` : ""));
     const currentMode = r.selected_mode || "";
-    $("deck-mode").innerHTML = `<option value="">全部</option>`
-      + r.modes.map(item => `<option value="${esc(item.value)}">${esc(item.label)}（${item.n} 场）</option>`).join("");
-    $("deck-mode").value = currentMode;
+    if (modeEl) {
+      modeEl.innerHTML = `<option value="">全部</option>`
+        + (r.modes || []).map(item => `<option value="${esc(item.value)}">${esc(item.label)}（${item.n} 场）</option>`).join("");
+      modeEl.value = currentMode;
+    }
     const currentVersion = r.selected_version || "";
-    $("deck-version").innerHTML = `<option value="">全部构筑版本</option>`
-      + r.versions.map(item => `<option value="${esc(item.value)}" title="${esc(item.value)}">${esc(item.label)}（${item.n} 场）</option>`).join("")
-      + (r.unknown_version ? `<option value="__unknown__">版本未记录（${r.unknown_version} 场）</option>` : "");
-    $("deck-version").value = currentVersion;
-    $("deck-summary").innerHTML = deckSummaryMarkup(r);
+    if (verEl) {
+      verEl.innerHTML = `<option value="">全部构筑版本</option>`
+        + (r.versions || []).map(item => `<option value="${esc(item.value)}" title="${esc(item.value)}">${esc(item.label)}（${item.n} 场）</option>`).join("")
+        + (r.unknown_version ? `<option value="__unknown__">版本未记录（${r.unknown_version} 场）</option>` : "");
+      verEl.value = currentVersion;
+    }
+    setHTML("deck-summary", deckSummaryMarkup(r));
     deckJourneyRender(r.journey);
     deckCommanderEnvRender(r.commander_env);
-  $("deck-observations").hidden = false;
-    $("deck-observation-body").innerHTML = deckObservationMarkup(r.observations, r.selected_observation?.key || "");
-    $("deck-observation-note").textContent = r.observations.note;
-    $("deck-version-note").textContent = deckVersionNote(r);
-    const commanders = r.opponent_commanders;
-    $("deck-commanders").hidden = false;
-    $("deck-commander-coverage").textContent = deckCommanderCoverage(commanders);
-    $("deck-commander-table").hidden = !commanders.rows.length;
-    $("deck-commander-body").innerHTML = deckCommanderRows(commanders, r.selected_commander?.key || "");
+    setHidden("deck-observations", false);
+    const observations = r.observations || {items: [], note: ""};
+    setHTML("deck-observation-body", deckObservationMarkup(observations, r.selected_observation?.key || ""));
+    setText("deck-observation-note", observations.note || "");
+    setText("deck-version-note", deckVersionNote(r));
+    const commanders = r.opponent_commanders || {rows: [], known: 0, eligible: 0, not_applicable: 0, multi_commander_matches: 0};
+    setHidden("deck-commanders", false);
+    setText("deck-commander-coverage", deckCommanderCoverage(commanders));
+    setHidden("deck-commander-table", !commanders.rows.length);
+    setHTML("deck-commander-body", deckCommanderRows(commanders, r.selected_commander?.key || ""));
     $("deck-commander-note").textContent = commanders.known
       ? `出现占比以主将已知的 ${commanders.known} 场为分母。每位主将在同一场最多计一次；${commanders.multi_commander_matches ? `其中 ${commanders.multi_commander_matches} 场记录了双主将，故各行占比之和可能超过 100%。` : "当前范围没有双主将对局。"}这是对局出现次数，不是不同玩家数。`
       : "没有可识别的对手主将，不按套牌名或其他字段猜测。";
-    $("deck-loading").hidden = true;
-    $("deck-records").hidden = false;
-    $("deck-record-title").textContent = r.selected_commander ? `对阵 ${r.selected_commander.name} 的全部记录`
-      : r.selected_observation ? `“${r.selected_observation.headline}”的依据` : "范围内对局（核对用）";
-    $("deck-record-all").hidden = !(r.selected_commander || r.selected_observation);
-    $("deck-record-count").textContent = r.records_truncated ? `共 ${r.records_total} 场，显示最近 200 场` : `共 ${r.records_total} 场`;
-    $("deck-record-body").innerHTML = r.records.map(row => deckRecordRow(row, r.versions)).join("")
-      || `<tr><td colspan="8" class="ci">当前范围没有对局</td></tr>`;
+    if (loading) loading.hidden = true;
+    setHidden("deck-records", false);
+    setText("deck-record-title", r.selected_commander ? `对阵 ${r.selected_commander.name} 的全部记录`
+      : r.selected_observation ? `“${r.selected_observation.headline}”的依据` : "范围内对局（核对用）");
+    setHidden("deck-record-all", !(r.selected_commander || r.selected_observation));
+    setText("deck-record-count", r.records_truncated ? `共 ${r.records_total} 场，显示最近 200 场` : `共 ${r.records_total ?? (r.records || []).length} 场`);
+    setHTML("deck-record-body", (r.records || []).map(row => deckRecordRow(row, r.versions)).join("")
+      || `<tr><td colspan="8" class="ci">当前范围没有对局</td></tr>`);
   } catch (error) {
     if (request !== deckRequest) return;
-    $("deck-loading").hidden = false;
-    $("deck-loading").textContent = error.message;
+    const loading = $("deck-loading");
+    if (loading) {
+      loading.hidden = false;
+      loading.textContent = error?.message || String(error);
+    }
   }
 }
 
@@ -682,16 +693,32 @@ document.addEventListener("click", (ev) => {
 });
 
 function openDeck(anchor) {
-  deckAnchor = anchor;
-  deckScope = "last20";
-  deckCommander = "";
-  deckObservation = "";
-  $("deck-mode").innerHTML = `<option value="">全部</option>`;
-  $("deck-version").innerHTML = `<option value="">全部构筑版本</option>`;
-  for (const button of document.querySelectorAll("#deck-scope button")) button.classList.toggle("on", button.dataset.scope === deckScope);
-  const dialog = $("deck-dialog");
-  if (!dialog.open) dialog.showModal();
-  loadDeckDetail();
+  try {
+    deckAnchor = anchor || {};
+    deckAnchor._loadedOnce = false;
+    deckScope = "last20";
+    deckCommander = "";
+    deckObservation = "";
+    const modeEl = $("deck-mode");
+    const verEl = $("deck-version");
+    if (modeEl) modeEl.innerHTML = `<option value="">全部</option>`;
+    if (verEl) verEl.innerHTML = `<option value="">全部构筑版本</option>`;
+    for (const button of document.querySelectorAll("#deck-scope button")) {
+      button.classList.toggle("on", button.dataset.scope === deckScope);
+    }
+    const dialog = $("deck-dialog");
+    if (dialog && !dialog.open) {
+      try { dialog.showModal(); }
+      catch { /* 已打开时忽略 */ }
+    }
+    loadDeckDetail().catch(() => {});
+  } catch (e) {
+    const loading = $("deck-loading");
+    if (loading) {
+      loading.hidden = false;
+      loading.textContent = e?.message || "打开套牌详情失败";
+    }
+  }
 }
 
 function dailyQualityView(summary, report) {
@@ -1030,7 +1057,18 @@ $("daily-latest").addEventListener("click", () => {if(dailyLatest) {$("daily-dat
 $("daily-today").addEventListener("click", () => {$("daily-date").value=localDay(new Date());loadDaily();});
 $("daily-yesterday").addEventListener("click", () => {const d=new Date();d.setDate(d.getDate()-1);$("daily-date").value=localDay(d);loadDaily();});
 $("daily-matches").addEventListener("click", () => {matchDay=$("daily-date").value;matchOffset=0;loadMatches();});
-$("m-all").addEventListener("click", () => {matchDay="";matchOffset=0;loadMatches();});
+$("m-today").addEventListener("click", () => {matchDay=localDay(new Date());matchOffset=0;syncMatchDayBtns();loadMatches();});
+$("m-yesterday").addEventListener("click", () => {const d=new Date();d.setDate(d.getDate()-1);matchDay=localDay(d);matchOffset=0;syncMatchDayBtns();loadMatches();});
+$("m-all").addEventListener("click", () => {matchDay="";matchOffset=0;syncMatchDayBtns();loadMatches();});
+function syncMatchDayBtns() {
+  const today = localDay(new Date());
+  const y = new Date(); y.setDate(y.getDate()-1);
+  const yesterday = localDay(y);
+  $("m-today")?.classList.toggle("on", matchDay === today);
+  $("m-yesterday")?.classList.toggle("on", matchDay === yesterday);
+  $("m-all")?.classList.toggle("on", !matchDay);
+}
+syncMatchDayBtns();
 $("m-group").addEventListener("change", loadMatches);
 $("m-more").addEventListener("click", () => {matchOffset+=matchLimit;loadMatches();});
 $("m-prev").addEventListener("click", () => {matchOffset=Math.max(0,matchOffset-matchLimit);loadMatches();});
@@ -1067,6 +1105,8 @@ $("deck-record-all").addEventListener("click", () => {deckCommander="";deckObser
 document.addEventListener("click", event => {
   const button = event.target.closest(".deck-open");
   if (!button) return;
+  event.preventDefault();
+  event.stopPropagation();
   try { openDeck(JSON.parse(decodeURIComponent(button.dataset.deck))); }
   catch { /* 畸形页面属性不发起查询 */ }
 });

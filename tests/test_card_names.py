@@ -22,11 +22,15 @@ def test_catalog_local_and_english(tmp_path):
         '1': {'name_en':'First', 'name_zh':'第一', 'source':'Scryfall'},
         '2': {'name_en':'A-First', 'name_zh':'', 'source':'无译名'},
         '9': {'name_en':'Front // Back', 'name_zh':'正面 // 背面', 'source':'x'},
+        '10': {'name_en':'A-Nadu', 'name_zh':'A-拿杜', 'source':'x'},
     }),encoding='utf-8')
     c=sqlite3.connect(':memory:')
     assert card_names.CardNames(c,root=tmp_path).get('1')['name'] == '第一'
     assert card_names.CardNames(c,lang='en',root=tmp_path).get('1')['name'] == 'First'
-    assert card_names.CardNames(c,root=tmp_path).get('2')['name'] == 'A-First'
+    # 炼金 A- 前缀在显示名中去掉；英文身份保留完整
+    alchemy = card_names.CardNames(c,root=tmp_path).get('10')
+    assert alchemy['name'] == '拿杜'
+    assert alchemy['name_en'] == 'A-Nadu'
     dual = card_names.CardNames(c,root=tmp_path).get('9')
     assert dual['name'] == '正面'
     assert dual['name_full'] == '正面 // 背面'

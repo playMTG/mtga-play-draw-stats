@@ -10,11 +10,22 @@ ROOT = Path(__file__).resolve().parent.parent
 _FACE_SPLIT = re.compile(r"\s+/{2,3}\s+")
 
 
-def front_face(name: str) -> str:
-    """双面/转化卡显示只用正面名称（列表不要把两面名并排）。"""
+_ALCH_PREFIX = re.compile(r"^A-\s*", re.IGNORECASE)
+
+
+def strip_alchemy_prefix(name: str) -> str:
+    """炼金重平衡 A- 前缀对展示无信息量（身份仍用完整英文/ grpId）。"""
     if not name or not isinstance(name, str):
         return name
-    return _FACE_SPLIT.split(name, 1)[0].strip() or name
+    return _ALCH_PREFIX.sub("", name, count=1).strip() or name
+
+
+def front_face(name: str) -> str:
+    """双面/转化卡显示只用正面名称；再去掉炼金 A- 前缀。"""
+    if not name or not isinstance(name, str):
+        return name
+    face = _FACE_SPLIT.split(name, 1)[0].strip() or name
+    return strip_alchemy_prefix(face)
 
 
 @lru_cache(maxsize=8)

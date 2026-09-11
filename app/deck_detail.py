@@ -12,6 +12,14 @@ from .event_names import friendly_event
 from .stats import is_constructed_opponent_event, wr
 
 
+def _commander_env_block(conn, visible, *, lang="zh", root=None):
+    try:
+        from .commander_env import commander_environment
+        return commander_environment(conn, deck_rows=visible, lang=lang, root=root)
+    except Exception:
+        return None
+
+
 SCOPES = {
     "today": "今天",
     "yesterday": "昨天",
@@ -167,6 +175,93 @@ def _summary(rows: list[dict]) -> dict:
                       sum(row["my_result"] in ("win", "loss") for row in play)),
         "on_draw": wr(sum(row["my_result"] == "win" for row in draw),
                       sum(row["my_result"] in ("win", "loss") for row in draw)),
+    }
+
+
+def _deck_kind(rows: list[dict]) -> dict:
+    """V1：套牌/临时牌组类型，供页头区分争锋构筑与轮抓抓位套牌。"""
+    events = [(row["event_id"] or "") for row in rows]
+    n = len(events)
+    if not n:
+        return {"kind": "unknown", "label": "资料不足"}
+    brawl = sum("Brawl" in e for e in events)
+    limited = sum(("Draft" in e or "Sealed" in e) for e in events)
+    if limited / n >= 0.6:
+        return {"kind": "limited", "label": "轮抓／现开临时套牌"}
+    if brawl / n >= 0.6:
+        return {"kind": "brawl", "label": "争锋构筑"}
+    return {"kind": "constructed", "label": "构筑套牌"}
+
+
+def _journey(scoped: list[dict]) -> dict:
+    """V1 套牌旅程：按日时间轴 + 构筑版本变更点（时间正序）。"""
+    by_day: dict[str, list[dict]] = {}
+    unknown_day = 0
+    for row in scoped:
+        day = _row_date(row)
+        if day is None:
+            unknown_day += 1
+            continue
+        by_day.setdefault(day.isoformat(), []).append(row)
+
+    timeline = []
+    version_marks = []
+    prev_version: str | None = None
+    for day in sorted(by_day):
+        rows = by_day[day]
+        summary = _summary(rows)
+        events = sorted({friendly_event(r["event_id"]) for r in rows if r["event_id"]})
+        versions_today = []
+        for row in sorted(rows, key=lambda r: (r["start_time"] is None, r["start_time"] or -1, r["id"])):
+            ver = _clean(row["my_deck_version"])
+            versions_today.append(ver)
+            if ver and ver != prev_version:
+                version_marks.append({
+                    "date": day,
+                    "version": ver,
+                    "match_id": row["match_id"],
+                    "n_after": 0,  # 填充时累加
+                })
+                prev_version = ver
+            elif not ver and prev_version is None:
+                prev_version = None
+        timeline.append({
+            "date": day,
+            "n": summary["n"],
+            "wins": summary["wins"],
+            "losses": summary["losses"],
+            "unknown_result": summary["unknown_result"],
+            "win_rate": summary["win_rate"],
+            "play": summary["play"],
+            "draw": summary["draw"],
+            "unknown_play_draw": summary["unknown_play_draw"],
+            "events": events[:4],
+            "versions": [v for v in dict.fromkeys(versions_today) if v],
+        })
+        if version_marks and version_marks[-1]["date"] == day:
+            version_marks[-1]["n_after"] += summary["n"]
+
+    # 版本变更后的累计场次（从变更日起）
+    for mark in version_marks:
+        after = [row for row in scoped
+                 if _row_date(row) is not None
+                 and _row_date(row).isoformat() >= mark["date"]
+                 and _clean(row["my_deck_version"]) == mark["version"]]
+        mark["n_after"] = len(after)
+        s = _summary(after)
+        mark["wins"] = s["wins"]
+        mark["losses"] = s["losses"]
+        mark["win_rate"] = s["win_rate"]
+
+    return {
+        "days": timeline,
+        "day_count": len(timeline),
+        "unknown_day": unknown_day,
+        "version_marks": version_marks,
+        "span_days": (
+            (date.fromisoformat(timeline[-1]["date"]) - date.fromisoformat(timeline[0]["date"])).days + 1
+            if timeline else 0
+        ),
     }
 
 
@@ -381,6 +476,10 @@ def deck_detail(conn: sqlite3.Connection, *, deck: str | None = None,
         "unknown_version": unknown_version,
         "version_count_in_scope": scoped_known_versions,
         "summary": _summary(scoped),
+        "deck_kind": _deck_kind(visible),
+        # 旅程始终基于当前身份+模式的全部可见记录，不随 last20 窗口截断
+        "journey": _journey(visible),
+        "commander_env": _commander_env_block(conn, visible, lang=lang, root=root),
         "observations": observations,
         "opponent_commanders": commanders,
         "selected_commander": commander_cards.get(opponent_commander),

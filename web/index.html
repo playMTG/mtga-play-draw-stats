@@ -112,6 +112,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <div id="event-name-list" style="max-height:280px;overflow:auto;overflow-wrap:anywhere"></div>
 </details>
 
+<p id="format-focus-note" class="ci" style="margin:0 0 10px" hidden></p>
 <section class="card" style="margin-bottom:14px">
   <div class="bar"><h2 style="margin:0">每日战报</h2>
     <button id="daily-today">今天</button><button id="daily-yesterday">昨天</button>
@@ -176,7 +177,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <div class="card" data-page-node-id="UyyNkj578YvJNWDZZplBGI"><h2 data-page-node-id="E6nGOSXWhIjX73AP0X7G4H">调度与胜负</h2><div id="mull-box" data-page-node-id="TmAVOOVNAbHvMC8XLfZmmp"></div></div>
 </div>
 
-<div class="card" style="margin-top:14px" data-page-node-id="JNmJrTDiaG1EGipmtzroeJ">
+<div class="card" style="margin-top:14px" id="rank-card" data-page-node-id="JNmJrTDiaG1EGipmtzroeJ">
   <h2 data-page-node-id="2C12BDs0EvKX38pBGSloNI">
     段位曲线 <span class="ci" id="rank-hint" data-page-node-id="kiZb1oWd7G8PaqgAtadPeY"></span>
     <button id="rk-c" class="on" style="margin-left:8px;padding:1px 8px;font-size:12px" data-page-node-id="V1oBVZi6nPxn17J0BSQ6An">构组</button>
@@ -186,7 +187,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <div class="ci" style="margin-top:6px" data-page-node-id="u12MmR23JKQH1BE2nciBE2">仅显示带时间戳的段位快照；相邻相同段位合并。早期无时间戳的记录无法定位，不参与曲线。</div>
 </div>
 
-<div class="card" style="margin-top:14px" data-page-node-id="kPjesv17VIdMGtagig7yNl">
+<div class="card" style="margin-top:14px" id="commander-card" data-page-node-id="kPjesv17VIdMGtagig7yNl">
   <h2 data-page-node-id="oByOOJZ5zo46YL3sshCjSe">对手主将档案 <span class="ci" id="cmdr-hint" data-page-node-id="aM4Cgbw82CmIRRXcPtDhHb"></span></h2>
   <details style="margin-bottom:10px"><summary>卡名显示与译名纠正</summary><p>中文优先，缺译名时保留英文。展开主将名称可查英文、本地牌库版本、译名阶段和卡牌编号。双面、连体、历险和隔间牌只要一个名称命中即可；未命中的部分继续显示英文。</p><p>可在插件目录 data/card_names.zh.json 按卡牌编号设置本地译名，保存后刷新。例如：</p><pre>{"123": {"name_zh": "我的译名", "source": "我的备注"}}</pre><p>删除条目恢复本地牌库译名。不同卡牌编号不因显示名相同而合并；stage 5 以下的机器候选默认不导入。</p></details>
 <div class="wrap" data-page-node-id="JMWgzRk6yebjUSM5lSdSB9"><table id="t-cmdr" data-page-node-id="qv3beE3lTfdWLZDf4IkuXA"><thead data-page-node-id="xVXeZuRypbSb3SrQlnLm1R"><tr data-page-node-id="kE6Pdi5Cy5vB8vmYRkyduR">
@@ -229,6 +230,28 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
     </div>
     <p id="deck-loading">选择套牌后读取详情。</p>
     <div id="deck-summary" class="grid g3" style="margin:12px 0"></div>
+    <section id="deck-journey" hidden>
+      <h2>套牌旅程</h2>
+      <p id="deck-journey-lead" class="ci deck-version-note"></p>
+      <div class="wrap" style="max-height:260px"><table>
+        <thead><tr><th>日期</th><th>场次</th><th>战绩</th><th>先后手</th><th>赛事</th></tr></thead>
+        <tbody id="deck-journey-body"></tbody>
+      </table></div>
+      <div id="deck-journey-versions" class="summary-list" style="margin-top:10px"></div>
+    </section>
+    <section id="deck-commander-env" hidden>
+      <h2>主将环境</h2>
+      <p id="deck-commander-env-lead" class="ci deck-version-note"></p>
+      <p id="deck-commander-env-pd" class="ci deck-version-note"></p>
+      <div class="wrap" style="max-height:280px"><table>
+        <thead><tr>
+          <th>对手主将</th><th>本套牌占比</th><th>全库占比</th><th>差</th>
+          <th>交手</th><th>先手</th><th>后手</th><th>记录</th>
+        </tr></thead>
+        <tbody id="deck-commander-env-body"></tbody>
+      </table></div>
+      <p id="deck-commander-env-note" class="ci deck-version-note"></p>
+    </section>
     <section id="deck-observations" hidden>
       <h2>本范围亮点</h2>
       <div id="deck-observation-body" class="deck-observation-grid"></div>

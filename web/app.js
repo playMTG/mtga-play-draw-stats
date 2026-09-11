@@ -39,6 +39,39 @@ async function api(path, extra) {
   return r.json();
 }
 
+
+function applyFormatFocus(focus) {
+  const note = $("format-focus-note");
+  if (!note) return;
+  const filtering = !!(params().toString());
+  if (!focus || focus.primary === "unknown" || filtering) {
+    note.hidden = true;
+    document.body.dataset.formatFocus = "";
+    return;
+  }
+  note.hidden = false;
+  note.textContent =
+    `近 ${focus.window_days} 天主赛制：${focus.label}` +
+    (focus.share != null ? `（约 ${focus.share}%）` : "") +
+    "。下面区块会按这个赛制收放；手动筛选后以筛选为准。";
+  document.body.dataset.formatFocus = focus.primary;
+  const cmdr = document.getElementById("commander-card");
+  const rank = document.getElementById("rank-card");
+  const opp = document.getElementById("opponent-types-card");
+  if (cmdr) cmdr.hidden = focus.show_commanders === false;
+  if (rank) {
+    rank.hidden = focus.show_rank === false;
+    if (focus.show_rank) {
+      // 排位/限赛焦点：把段位曲线挪到每日战报后面，避免沉在页底
+      const daily = document.querySelector("section.card");
+      if (daily && rank.previousElementSibling !== daily && daily.nextSibling) {
+        daily.parentNode.insertBefore(rank, daily.nextSibling);
+      }
+    }
+  }
+  if (opp) opp.hidden = focus.show_opponent_types === false;
+}
+
 function bigCard(id, ciId, w) {
   $(id).innerHTML = w.n
     ? `${w.wr}<span class="muted"> %</span>`
@@ -141,6 +174,7 @@ async function loadOverview() {
   $("k-draw-rate").textContent = rates.draw_rate == null ? "无样本" : `${rates.draw_rate}%`;
   $("k-play-rate-note").textContent = `先手 ${rates.play} 场 · 后手 ${rates.draw} 场 · 未知 ${rates.unknown} 场`;
   $("k-draw-rate-note").textContent = "全史 · 当前筛选 · 比例仅含先后手已知的有结果对局";
+  applyFormatFocus(o.format_focus);
   bigCard("k-total", "k-total-ci", o.total);
   if (o.hidden) {
     $("k-total-ci").textContent +=
@@ -498,12 +532,76 @@ function deckObservationMarkup(observations, selectedKey = "") {
   </article>`).join("");
 }
 
+
+function deckJourneyRender(journey) {
+  const sec = $("deck-journey");
+  if (!journey || !journey.days || !journey.days.length) {
+    sec.hidden = true;
+    return;
+  }
+  sec.hidden = false;
+  const days = journey.days;
+  $("deck-journey-lead").textContent =
+    `共 ${journey.day_count} 个有记录日` +
+    (journey.span_days ? `，跨度约 ${journey.span_days} 天` : "") +
+    (journey.unknown_day ? `；另 ${journey.unknown_day} 场日期未知未入轴` : "") +
+    "。旅程按当前身份全部记录，不随上方「近 20 场」截断。";
+  $("deck-journey-body").innerHTML = days.map(d => {
+    const wr = d.win_rate && d.win_rate.wr != null ? `${d.win_rate.wr}%` : "–";
+    return `<tr>
+      <td><button type="button" class="link-button journey-day" data-day="${esc(d.date)}">${esc(d.date)}</button></td>
+      <td class="num">${d.n}</td>
+      <td>${d.wins} 胜 ${d.losses} 负 <span class="ci">${wr}</span></td>
+      <td>先 ${d.play} · 后 ${d.draw}${d.unknown_play_draw ? ` · 未 ${d.unknown_play_draw}` : ""}</td>
+      <td class="clip" title="${esc((d.events||[]).join("、"))}">${esc((d.events||[]).join("、") || "–")}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="5" class="ci">没有可入轴的日期</td></tr>`;
+  const marks = journey.version_marks || [];
+  $("deck-journey-versions").innerHTML = marks.length
+    ? marks.map(m => `<div class="summary-item"><strong>${esc(m.date)}</strong><span>改为构筑 ${esc(String(m.version).slice(0,12))}… → 此后 ${m.n_after} 场（${m.wins} 胜 ${m.losses} 负）</span></div>`).join("")
+    : `<p class="ci">尚未记录到构筑版本变更。</p>`;
+}
+
+
+function deckCommanderEnvRender(env) {
+  const sec = $("deck-commander-env");
+  if (!env || !env.applicable || !(env.rows || []).length) {
+    sec.hidden = true;
+    return;
+  }
+  sec.hidden = false;
+  const mine = (env.my_commanders || []).map(c => c.name).join(" / ") || "主将未记录";
+  $("deck-commander-env-lead").textContent =
+    `我方主将：${mine} · 对手主将已知 ${env.known}/${env.eligible} 场`;
+  const pd = env.play_draw || {};
+  const rate = pd.play_rate != null ? `先手率 ${pd.play_rate}%` : "";
+  $("deck-commander-env-pd").textContent =
+    `先后手：先 ${pd.play} · 后 ${pd.draw}${pd.unknown_pd ? ` · 未知 ${pd.unknown_pd}` : ""}${rate ? " · " + rate : ""}`;
+  $("deck-commander-env-body").innerHTML = env.rows.map(row => {
+    const delta = row.delta_pp == null ? "–"
+      : `${row.delta_pp > 0 ? "+" : ""}${row.delta_pp} pp`;
+    return `<tr>
+      <td>${cardMarkup(row)}</td>
+      <td class="num">${row.share_known}% <span class="ci">(${row.n})</span></td>
+      <td class="num">${row.baseline_share == null ? "–" : row.baseline_share + "%"}</td>
+      <td class="num">${esc(delta)}</td>
+      <td>${row.win_rate.wins} 胜 ${row.win_rate.n - row.win_rate.wins} 负</td>
+      <td class="num">${row.on_play.n ? row.on_play.wr + "%" : "–"}</td>
+      <td class="num">${row.on_draw.n ? row.on_draw.wr + "%" : "–"}</td>
+      <td><button type="button" class="ti-btn deck-commander-open" data-commander="${esc(row.key)}">查看 ${row.n} 场</button></td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="8" class="ci">暂无可列出的对手主将</td></tr>`;
+  $("deck-commander-env-note").textContent = env.note || "";
+}
+
 async function loadDeckDetail() {
   if (!deckAnchor) return;
   const request = ++deckRequest;
   $("deck-loading").hidden = false;
   $("deck-loading").textContent = "正在读取套牌详情…";
   $("deck-summary").innerHTML = "";
+  $("deck-journey").hidden = true;
+  $("deck-commander-env").hidden = true;
   $("deck-observations").hidden = true;
   $("deck-commanders").hidden = true;
   $("deck-records").hidden = true;
@@ -522,7 +620,11 @@ async function loadDeckDetail() {
     const r = await response.json();
     if (request !== deckRequest) return;
     $("deck-title").textContent = r.title;
-    $("deck-identity").textContent = r.identity.note + (r.identity.aliases.length > 1 ? ` 历史名称：${r.identity.aliases.join("、")}。` : "");
+    const kindLabel = r.deck_kind?.label || "";
+    $("deck-identity").textContent =
+      (kindLabel ? `【${kindLabel}】 ` : "") +
+      r.identity.note +
+      (r.identity.aliases.length > 1 ? ` 历史名称：${r.identity.aliases.join("、")}。` : "");
     const currentMode = r.selected_mode || "";
     $("deck-mode").innerHTML = `<option value="">全部</option>`
       + r.modes.map(item => `<option value="${esc(item.value)}">${esc(item.label)}（${item.n} 场）</option>`).join("");
@@ -533,7 +635,9 @@ async function loadDeckDetail() {
       + (r.unknown_version ? `<option value="__unknown__">版本未记录（${r.unknown_version} 场）</option>` : "");
     $("deck-version").value = currentVersion;
     $("deck-summary").innerHTML = deckSummaryMarkup(r);
-    $("deck-observations").hidden = false;
+    deckJourneyRender(r.journey);
+    deckCommanderEnvRender(r.commander_env);
+  $("deck-observations").hidden = false;
     $("deck-observation-body").innerHTML = deckObservationMarkup(r.observations, r.selected_observation?.key || "");
     $("deck-observation-note").textContent = r.observations.note;
     $("deck-version-note").textContent = deckVersionNote(r);
@@ -548,7 +652,7 @@ async function loadDeckDetail() {
     $("deck-loading").hidden = true;
     $("deck-records").hidden = false;
     $("deck-record-title").textContent = r.selected_commander ? `对阵 ${r.selected_commander.name} 的全部记录`
-      : r.selected_observation ? `“${r.selected_observation.headline}”的依据` : "范围内对局";
+      : r.selected_observation ? `“${r.selected_observation.headline}”的依据` : "范围内对局（核对用）";
     $("deck-record-all").hidden = !(r.selected_commander || r.selected_observation);
     $("deck-record-count").textContent = r.records_truncated ? `共 ${r.records_total} 场，显示最近 200 场` : `共 ${r.records_total} 场`;
     $("deck-record-body").innerHTML = r.records.map(row => deckRecordRow(row, r.versions)).join("")
@@ -559,6 +663,23 @@ async function loadDeckDetail() {
     $("deck-loading").textContent = error.message;
   }
 }
+
+function jumpToDaily(day) {
+  if (!day) return;
+  $("daily-date").value = day;
+  loadDaily();
+  const el = document.getElementById("daily-section") || document.querySelector("#daily-date");
+  if (el && el.scrollIntoView) el.scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest?.(".journey-day");
+  if (!btn) return;
+  const day = btn.dataset.day;
+  const dialog = $("deck-dialog");
+  if (dialog?.open) dialog.close();
+  jumpToDaily(day);
+});
 
 function openDeck(anchor) {
   deckAnchor = anchor;
@@ -664,10 +785,15 @@ async function loadDaily() {
     + (r.modes || []).map(m => `<p>${esc(m.mode)}：${m.n} 场 · ${m.wins} 胜 ${m.losses} 负（整场胜负，首局先后手）</p>`).join("")
     + (r.opponent_types?.total ? `<p>构筑对手类型资料：${r.opponent_types.known}/${r.opponent_types.total} 场。${Object.entries(r.opponent_types.rows).map(([k,v]) => `${esc(ARCH_ZH[k] || k)} ${v} 场`).join("、") || "尚无逐场标注，不推测对手构筑。"}</p>` : "");
   const history = r.history_summary;
-  $("daily-history-section").hidden = !(history?.items || []).length;
-  if ((history?.items || []).length) {
+  const historyItems = history?.items || [];
+  const hasBaseline = historyItems.some(i => i.delta_pp != null);
+  // 无基线不展示空对比（VISION V0）
+  $("daily-history-section").hidden = !hasBaseline;
+  if (hasBaseline) {
     $("daily-history-lead").innerHTML = `<p><strong>${esc(history.headline)}</strong></p>`;
-    $("daily-history-items").innerHTML = history.items.map(item => `<p>${esc(item.text)}${item.small_sample ? " <span class=\"ci\">当天样本较少，仅描述。</span>" : ""}</p>`).join("");
+    $("daily-history-items").innerHTML = historyItems
+      .filter(i => i.delta_pp != null)
+      .map(item => `<p>${esc(item.text)}${item.small_sample ? " <span class=\"ci\">当天样本较少，仅描述。</span>" : ""}</p>`).join("");
     $("daily-history-note").textContent = history.note;
   }
   const quality = dailyQualityView(s, r);

@@ -189,6 +189,50 @@ def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         "by_deck": [{"key": r["k"], **wr(r["w"] or 0, r["n"])} for r in by_deck],
         "trend_daily": [{"key": r["d"], **wr(r["w"] or 0, r["n"])} for r in trend],
         "trend_weekly": [{"key": r["wk"], **wr(r["w"] or 0, r["n"])} for r in trend_w],
+        "format_focus": format_focus(conn),
+    }
+
+
+def format_focus(conn: sqlite3.Connection, window_days: int = 30) -> dict:
+    """V3：最近窗口的主赛制，供首页按赛制收放信息密度。
+
+    只在筛选为空时有意义；筛选后由前端看 family/event 自行判断。
+    """
+    from datetime import datetime, timedelta
+    start = datetime.now() - timedelta(days=window_days)
+    cutoff = int(start.timestamp() * 1000)
+    rows = conn.execute(
+        """SELECT event_id, COUNT(*) n FROM matches
+            WHERE start_time >= ? AND my_result IS NOT NULL
+            GROUP BY event_id""", (cutoff,)
+    ).fetchall()
+    by_fam: dict[str, int] = {}
+    for r in rows:
+        fam = event_family(r["event_id"] or "")
+        by_fam[fam] = by_fam.get(fam, 0) + (r["n"] or 0)
+    if not by_fam:
+        return {"primary": "unknown", "label": "资料不足", "share": None,
+                "window_days": window_days, "by_family": {}}
+    primary, n = max(by_fam.items(), key=lambda kv: kv[1])
+    total = sum(by_fam.values())
+    labels = {
+        "争锋": "争锋",
+        "轮抽": "轮抽",
+        "现开": "现开",
+        "排位天梯": "排位天梯",
+        "自由对战": "自由对战",
+        "构组赛": "构组赛",
+        "每周魔法": "周中",
+    }
+    return {
+        "primary": primary,
+        "label": labels.get(primary, primary),
+        "share": round(100 * n / total, 1) if total else None,
+        "window_days": window_days,
+        "by_family": by_fam,
+        "show_commanders": primary == "争锋",
+        "show_rank": primary in ("排位天梯", "轮抽", "现开"),
+        "show_opponent_types": primary in ("排位天梯", "自由对战", "构组赛", "每周魔法"),
     }
 
 

@@ -18,8 +18,8 @@ SETS = {
 }
 EXACT = {
     'Ladder': '标准排位', 'Traditional_Ladder': '传统标准排位',
-    'Play': '标准自由对战', 'Play_Brawl_Historic': '史迹争锋（非排位）',
-    'Play_Brawl': '标准争锋（非排位）',
+    'Play': '标准自由对战', 'Play_Brawl_Historic': '史迹争锋',
+    'Play_Brawl': '标准争锋',
     'AIBotMatch': '机器人练习', 'DualColorPrecons': '双色预组套牌对战',
     'Constructed_BestOf3': '传统构筑赛（BO3）',
     'DirectGameTournamentMode': '直接挑战（比赛模式）',
@@ -32,15 +32,15 @@ PREFIXES = {
     'PickTwoDraft_':'选两张轮抽', 'TradDraft_':'传统轮抽',
     'TraditionalDraft_':'传统轮抽', 'ContenderDraft_':'竞争者轮抽',
     'Trad_Sealed_':'传统现开', 'TraditionalSealed_':'传统现开', 'Sealed_':'现开',
-    'MWM_':'每周魔法', 'Festival_':'节庆活动', 'Jump_In_':'Jump In／跳入对战',
+    'MWM_':'周中', 'Festival_':'节庆活动', 'Jump_In_':'Jump In／跳入对战',
     'Brawl_Challenge_':'争锋挑战赛', 'CompCons_Metagame_Challenge_':'构筑环境挑战赛',
     'Constructed_Event_':'标准构筑赛', 'Traditional_Cons_Event_':'传统标准构筑赛',
-    'Yargle_Day_':'亚格勒日', 'AlchemyPrecons_':'炼金预组套牌对战',
+    'Yargle_Day_':'雅骨尔日', 'AlchemyPrecons_':'炼金预组套牌对战',
     'AlchemyRebalanceEvent_':'炼金调整活动', 'AlchemyWelcome_':'炼金入门活动',
     'Constructed_':'构筑活动',
 }
 TERMS = {
-    **FORMATS, 'Brawl':'争锋', 'BrawlBuilder':'争锋构筑', 'Momir':'莫米',
+    **FORMATS, 'Brawl':'争锋', 'BrawlBuilder':'争锋构筑', 'Momir':'莫秘维',
     'OmniscienceDraft':'全知轮抽', 'Omniscience':'全知', 'Artisan':'工匠',
     'Pauper':'纯普', 'HistoricPauper':'史迹纯普', 'StandardPauper':'标准纯普',
     'HistoricArtisan':'史迹工匠', 'ArtisanBrawl':'工匠争锋', 'CascadeBrawl':'倾曳争锋',

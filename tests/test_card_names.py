@@ -21,11 +21,15 @@ def test_catalog_local_and_english(tmp_path):
     (tmp_path/'data/card_names.catalog.json').write_text(json.dumps({
         '1': {'name_en':'First', 'name_zh':'第一', 'source':'Scryfall'},
         '2': {'name_en':'A-First', 'name_zh':'', 'source':'无译名'},
+        '9': {'name_en':'Front // Back', 'name_zh':'正面 // 背面', 'source':'x'},
     }),encoding='utf-8')
     c=sqlite3.connect(':memory:')
     assert card_names.CardNames(c,root=tmp_path).get('1')['name'] == '第一'
     assert card_names.CardNames(c,lang='en',root=tmp_path).get('1')['name'] == 'First'
     assert card_names.CardNames(c,root=tmp_path).get('2')['name'] == 'A-First'
+    dual = card_names.CardNames(c,root=tmp_path).get('9')
+    assert dual['name'] == '正面'
+    assert dual['name_full'] == '正面 // 背面'
     path=tmp_path/'data/card_names.zh.json'
     path.write_text(json.dumps({'1':{'name_zh':'社区译名','source':'社区出处'}}),encoding='utf-8')
     name=card_names.CardNames(c,root=tmp_path).get('1')

@@ -1,86 +1,86 @@
+from app.daily_copy import TEMPLATES, pick
 from app.daily_highlights import highlights
 
 
 def row(i, pd='play', result='win', commander=None, event='Play_Brawl_Historic'):
     return dict(match_id=str(i),start_time=i,event_id=event,my_deck_tag='example',
                 play_draw=pd,my_result=result,commanders=[commander] if commander else [],
-                commander_names=[commander] if commander else [])
+                commander_names=[commander] if commander else [], duration_sec=0)
 
 
-def test_empty_and_single():
-    assert highlights([])==[]
-    facts=highlights([row(1,pd=None,result=None)])
-    assert len(facts)==1 and '结果待确认' in facts[0]['text']
-    assert '先后手未记录' in facts[0]['text']
-    assert facts[0]['match_ids']==['1']
+def test_marathon_day_beats_ordinary_streak():
+    """27 场：亮点是场次，不是三连先手或五五开胜率。"""
+    rows = []
+    for i in range(27):
+        # 14 胜 13 负 ≈ 51.9%，先后手交错，中间夹一段 3 先手
+        pd = 'draw' if i in (5, 6, 7) else ('play' if i % 2 else 'draw')
+        result = 'win' if i % 2 == 0 else 'loss'
+        rows.append(row(i, pd=pd, result=result))
+    facts = highlights(rows)
+    kinds = [f['kind'] for f in facts]
+    assert 'volume' in kinds
+    assert facts[0]['kind'] == 'volume'
+    text = ' '.join(f['text'] for f in facts)
+    assert '27' in text
+    assert '3 连' not in text and '三连' not in text
 
 
-def test_seven_all_play_or_draw():
-    for pd, word in [('play','先手'),('draw','后手')]:
-        facts=highlights([row(i,pd=pd) for i in range(7)])
-        assert facts[0]['kind']=='play_draw_streak'
-        assert f'7 场全部{word}' in facts[0]['text']
-        assert f'连续 7 把{word}' in facts[0]['text']
-        assert facts[0]['level']=='legendary'
-        assert facts[0]['probability']['scan_percent']==0.78
-        assert facts[0]['n']==facts[0]['denominator']==7
-        assert len(facts)<=2
+def test_marathon_with_legendary_streak_keeps_both():
+    rows = [row(i, pd='draw', result='win') for i in range(20)]
+    facts = highlights(rows)
+    kinds = {f['kind'] for f in facts}
+    assert 'volume' in kinds
+    # 20 连后手会 legendary，可与耐力局并列
+    assert 'play_draw_streak' in kinds or 'hot_wr' in kinds
 
 
-def test_unknown_never_becomes_all_play():
-    facts=highlights([row(i,pd='play' if i<4 else None) for i in range(7)])
-    assert '4 场已知记录连成连续 4 把先手' in facts[0]['text']
-    assert '另 3 场先后手未记录' in facts[0]['text']
-    assert '7 场全部先手' not in facts[0]['text']
-    assert facts[0]['n']==4 and facts[0]['denominator']==7
+def test_empty_and_single_unknown_keeps_fallback():
+    assert highlights([]) == []
+    facts = highlights([row(1, pd=None, result=None)])
+    assert len(facts) == 1
+    assert facts[0]['kind'] == 'single'
+    # 主句来自话术库或战绩兜底，都可回查 match_ids
+    assert facts[0]['match_ids'] == ['1']
 
 
-def test_three_draws_are_evaluated_even_when_not_all_matches_are_draws():
-    rows=[row(0,pd='play'),row(1,pd='draw'),row(2,pd='draw'),row(3,pd='draw'),row(4,pd='play')]
-    fact=highlights(rows)[0]
-    assert fact['kind']=='play_draw_streak'
-    assert '连续 3 把后手' in fact['text']
-    assert fact['match_ids']==['1','2','3']
-    assert fact['probability']['scan_percent']==25.0
+def test_seven_all_draw_is_legendary_tone():
+    facts = highlights([row(i, pd='draw') for i in range(7)])
+    streak = next(f for f in facts if f['kind'] == 'play_draw_streak')
+    assert streak['level'] == 'legendary'
+    assert '7' in streak['text'] or '连' in streak['text']
+    # 少用纯感叹词
+    assert '卧槽' not in streak['text'] and '哇' not in streak['text']
+    assert '太美' not in streak['text']
 
 
-def test_repeated_commander_with_record():
-    rows=[row(i,pd='play' if i%2 else 'draw',result='loss' if i==4 else 'win',
-              commander='A' if i<3 else 'B') for i in range(5)]
-    facts=highlights(rows)
-    assert facts[0]['kind']=='repeat_commander'
-    assert '3 场遇到 A' in facts[0]['text'] and '3 胜 0 负' in facts[0]['text']
-    assert '4 胜 1 负' in facts[1]['text']
-    assert facts[0]['match_ids']==['0','1','2']
+def test_hot_wr_no_lab_numbers():
+    rows = [row(i, pd='play' if i % 2 else 'draw', result='loss' if i == 4 else 'win') for i in range(5)]
+    facts = highlights(rows)
+    assert facts[0]['kind'] == 'hot_wr'
+    assert '4 胜' not in facts[0]['text']
+    assert '%' not in facts[0]['text']
 
 
-def test_mixed_formats_and_same_name_do_not_inflate():
-    rows=[row(i,pd='draw' if i%2 else 'play',commander='A') for i in range(3)]
-    rows += [row(3,pd='draw',commander='A',event='PremierDraft_TEST'),row(4,commander=None)]
-    fact=highlights(rows)[0]
-    assert fact['kind']=='repeat_commander'
-    assert fact['n']==3 and fact['denominator']==3
-    assert '另有 1 场争锋' in fact['text']
+def test_repeat_commander_is_banter():
+    rows = [row(i, pd='play' if i % 2 else 'draw', commander='A' if i < 3 else 'B') for i in range(5)]
+    facts = highlights(rows)
+    rep = next(f for f in facts if f['kind'] == 'repeat_commander')
+    assert 'A' in rep['text']
+    assert any(w in rep['text'] for w in ('缘分', '又', '老朋友', '孽缘', '怎么又是'))
 
 
-def test_fourth_win_is_recorded_order_not_reward_claim():
-    rows=[row(i,pd='play' if i%2 else 'draw',result='loss' if i==0 else 'win') for i in range(5)]
-    facts=highlights(list(reversed(rows)))
-    assert facts[0]['kind']=='four_wins'
-    assert '第 5 场' in facts[0]['text']
-    assert '任务' not in facts[0]['text']
-    assert facts[0]['match_ids']==['0','1','2','3','4']
+def test_repeat_requires_three():
+    rows = [row(i, pd='play' if i % 2 else 'draw', commander='A' if i < 2 else f'C{i}') for i in range(4)]
+    assert all(f['kind'] != 'repeat_commander' for f in highlights(rows))
 
 
-def test_no_highlight_still_has_summary():
-    facts=highlights([row(i,pd=None,result='loss') for i in range(4)])
-    assert facts[0]['kind']=='results'
-    assert '0 胜 4 负' in facts[0]['text']
+def test_pick_is_stable_per_seed():
+    a = pick('hot_wr', ['m1', 'm2'])
+    b = pick('hot_wr', ['m1', 'm2'])
+    assert a == b and a
 
 
-def test_fourth_win_evidence_includes_later_results():
-    rows=[row(i,pd='play' if i%2 else 'draw',result='loss' if i==5 else 'win') for i in range(6)]
-    fact=highlights(rows)[0]
-    assert fact['kind']=='four_wins'
-    assert '5 胜 1 负' in fact['text']
-    assert fact['match_ids']==[str(i) for i in range(6)]
+def test_templates_have_no_meimei_typo():
+    blob = repr(TEMPLATES)
+    assert '太美了' not in blob
+    assert 'volume_marathon' in TEMPLATES

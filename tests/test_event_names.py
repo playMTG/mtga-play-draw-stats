@@ -10,7 +10,7 @@ from app.insights import daily_report
 @pytest.mark.parametrize('raw, expected', [
     ('Traditional_Historic_Play', '传统史迹自由对战'),
     ('TradDraft_NEO_20220101', '传统轮抽 · 神河：霓朝纪 · 2022-01-01'),
-    ('MWM_HistoricPauper_20220101', '每周魔法 · 史迹纯普 · 2022-01-01'),
+    ('MWM_HistoricPauper_20220101', '周中 · 史迹纯普 · 2022-01-01'),
     ('PremierDraft_UNSEEN_Special_20220101', '优选轮抽 · UNSEEN · Special · 2022-01-01'),
     ('FutureUnknown_Event', 'FutureUnknown_Event'),
     (None, '赛事未记录'), ('', '赛事未记录'), ('(unknown)', '赛事未记录'),

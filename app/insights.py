@@ -70,7 +70,11 @@ def aggregate(rows):
         'commander_eligible': len(eligible),
         'commander_known': sum(bool(r['commanders']) for r in eligible),
         'distinct_commanders': len(cmdrs),
-        'top_commanders': [{**card_info[k], 'n': n} for k, n in cmdrs.most_common(5)],
+        'top_commanders': [
+            {**card_info[k], 'n': n}
+            for k, n in cmdrs.most_common(5)
+            if n >= 3  # V0：仅重复遭遇（≥3 场）才进「常遇主将」
+        ],
         'duration_known': sum(r['duration_sec'] is not None for r in rows),
         'duration_sec': sum(r['duration_sec'] or 0 for r in rows),
         'max_loss_streak': max_loss_streak([r['my_result'] for r in rows]),

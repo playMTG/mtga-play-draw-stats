@@ -10,7 +10,7 @@ const context = vm.createContext({$,params:()=>scope,api:()=>new Promise(resolve
 vm.runInContext(source.slice(source.indexOf('function eventMarkup'),source.indexOf('async function loadMatches')),context);
 vm.runInContext(source.slice(source.indexOf('function dailyQualityView'),source.indexOf('function fillSelect')),context);
 const response = text => ({date:'2026-01-02',plain:text,is_today:false,latest_date:null,highlights:[],highlight_records:[],events:[{event:'Ladder',label:'标准排位',n:1,wins:1,losses:0,play:1,draw:0,unknown_pd:0}],modes:[],unknown_date:0,
-history_summary:{headline:'标准排位 BO1 高 12 个百分点',note:'此前 30 天只是查找窗口',items:[{text:'标准排位 · BO1：当天 1 场，1 胜 0 负；可比范围胜率较高。',small_sample:true}]},
+history_summary:{headline:'标准排位 BO1 高 12 个百分点',note:'此前 30 天只是查找窗口',items:[{text:'标准排位 · BO1：当天 1 场，1 胜 0 负；可比范围胜率较高。',small_sample:true,delta_pp:12}]},
 summary:{n:1,wins:1,losses:0,play:1,draw:0,unknown_pd:0,win_rate:{wr:100,n:1},play_rate:{wr:100,n:1},max_loss_streak:0,duration_sec:0,top_commanders:[],mulligan_known:0,deck_known:0,commander_known:0,commander_eligible:0}});
 (async()=>{
  const old=context.loadDaily(); scope='new'; const current=context.loadDaily();

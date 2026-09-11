@@ -1,10 +1,20 @@
 """Card display metadata, keyed strictly by Arena grpId, never translated text."""
 import json
+import re
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+_FACE_SPLIT = re.compile(r"\s+/{2,3}\s+")
+
+
+def front_face(name: str) -> str:
+    """双面/转化卡显示只用正面名称（列表不要把两面名并排）。"""
+    if not name or not isinstance(name, str):
+        return name
+    return _FACE_SPLIT.split(name, 1)[0].strip() or name
 
 
 @lru_cache(maxsize=8)
@@ -54,6 +64,8 @@ class CardNames:
         if isinstance(local, dict) and isinstance(local.get('name_zh'), str) and local['name_zh'].strip():
             zh = local['name_zh'].strip()
             source = '用户本地译名' + ('：' + local['source'] if isinstance(local.get('source'), str) else '')
-        name = (zh if self.lang == 'zh' else english) or english or zh or f'grpId:{gid}'
-        return {'key': gid, 'name': name, 'name_en': english, 'name_zh': zh,
+        name_full = (zh if self.lang == 'zh' else english) or english or zh or f'grpId:{gid}'
+        name = front_face(name_full) if name_full and not name_full.startswith('grpId:') else name_full
+        return {'key': gid, 'name': name, 'name_full': name_full,
+                'name_en': english, 'name_zh': zh,
                 'name_source': source or '来源未记录'}

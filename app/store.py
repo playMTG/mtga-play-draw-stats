@@ -173,6 +173,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
              AND match_id IN (SELECT match_id FROM matches WHERE my_seat IS NOT NULL)"""
     )
     conn.commit()
+    # R13.1 历史残留清理：客户端会把徽记（Emblem）误写进主将区，且徽记恒为
+    # grpId=2（实测 33 份归档共 16 次，objectSourceGrpId=87496）。旧解析据此
+    # 在 commanders 里留下伪主将——就是对手档案里那个永远查不到卡名的条目。
+    # 解析侧已在 events._on_commanders 按 GameObjectType 过滤，这里清历史数据。
+    # grpId=2 不可能是合法卡牌：cards 表实测最小 grpId 为 6873。
+    conn.execute("DELETE FROM commanders WHERE grp_id = '2'")
+    conn.commit()
 
 
 def tag_bot_decks(conn: sqlite3.Connection, patterns: list[str]) -> int:

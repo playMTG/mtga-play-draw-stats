@@ -410,6 +410,14 @@ class SessionBuilder:
             # 同 zone 的多个实例可能分属两个玩家（各自主将），非伙伴
             for iid in z.get("objectInstanceIds") or []:
                 obj = self._idmap.get(iid) or {}
+                # Command 区理应只放主将牌，但客户端会把徽记（Emblem）也塞进来：
+                # 全量实测 33 份归档，Command 区只有 Card(317) 与 Emblem(16) 两种类型，
+                # 后者恒为 grpId=2 / objectSourceGrpId=87496，会被当成第二个主将，
+                # 在对手主将档案里留下一个永远查不到卡名的「对手」。
+                # 只认卡牌类型；type 缺失时放行，兼容合成日志与旧格式。
+                obj_type = obj.get("type")
+                if obj_type and obj_type != "GameObjectType_Card":
+                    continue
                 grp = obj.get("grpId") or obj.get("cardId")
                 seat = _to_int(obj.get("ownerSeatId")) or _to_int(z.get("ownerSeatId"))
                 if grp is None or seat is None:

@@ -1,5 +1,5 @@
 {
-  "_comment": "Brawl 主将→卡组类型先验映射。可随时编辑，重启面板生效；对局详情里的手动打标优先于本表。类型键：Aggro=快攻 Control=控制 Combo=组合技 Ramp= Ramp Midrange=中速 Other=其他",
+  "_comment": "Brawl 主将→卡组类型先验映射。可随时编辑，重启面板生效；对局详情里的手动打标优先于本表。类型键：Aggro=快攻 Control=控制 Combo=组合技 Ramp= Ramp Midrange=中速 Other=其他。支持多标签：写成数组表示多轴卡组，如 \"X\": [\"Ramp\", \"Combo\"]；按类型聚合战绩时每个标签各计一次。",
   "A-Nadu, Winged Wisdom": "Combo",
   "Nadu, Winged Wisdom": "Combo",
   "Ulalek, Fused Atrocity": "Combo",
@@ -12,6 +12,8 @@
   "Omnath, Locus of the Roil": "Ramp",
   "Ketra, Heart of Kadach": "Ramp",
   "The Grand Calcutron": "Ramp",
+  "Imoti, Celebrant of Bounty": "Ramp",
+  "Mythweaver Poq": "Ramp",
   "Ketramose, the New Dawn": "Control",
   "Nicol Bolas, the Ravager // Nicol Bolas, the Arisen": "Control",
   "Atraxa, Grand Unifier": "Control",
@@ -24,6 +26,7 @@
   "Sorin, Vengeful Bloodlord": "Midrange",
   "Hei Bai, Forest Guardian": "Midrange",
   "Etali, Primal Storm": "Midrange",
+  "Etali, Primal Conqueror": ["Combo", "Ramp"],
   "Ragavan, Nimble Pilferer": "Aggro",
   "Ajani, Nacatl Pariah // Ajani, Nacatl Avenger": "Aggro",
   "Sephiroth, Fabled SOLDIER // Sephiroth, One-Winged Angel": "Aggro",

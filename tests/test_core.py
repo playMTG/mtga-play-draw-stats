@@ -70,6 +70,97 @@ def test_partner_commander_identified():
     assert sorted(c["partner_idx"] for c in cmd) == [0, 1]
 
 
+# ---------- events：主将区的类型过滤（R13.1） ----------
+
+def _command_zone_line(objs: list[tuple[int, str, str | None]]) -> str:
+    """构造一条带 ZoneType_Command 的状态行。
+
+    objs: [(instanceId, grpId, type)]，type=None 表示该 gameObject 不带 type 字段
+    （合成日志与旧格式的真实形态）。
+    """
+    game_objects = ",".join(
+        '{"instanceId":%d,"grpId":"%s"%s,"ownerSeatId":2}'
+        % (iid, grp, (',"type":"%s"' % t) if t else "")
+        for iid, grp, t in objs
+    )
+    zone_ids = ",".join(str(iid) for iid, _, _ in objs)
+    return (
+        '[UnityCrossThreadLogger]{"timestamp":"' + fx.T1 + '","greToClientEvent":{'
+        '"greToClientMessages":[{"type":"GREMessageType_GameStateMessage",'
+        '"gameStateMessage":{"turnInfo":{"turnNumber":1,"activePlayer":1},'
+        '"zones":[{"zoneId":1,"type":"ZoneType_Hand","ownerSeatId":1},'
+        '{"zoneId":3,"type":"ZoneType_Command","objectInstanceIds":[' + zone_ids + ']}],'
+        '"gameObjects":[' + game_objects + ']}}]}}\n'
+    )
+
+
+def _brawl_lines(objs: list[tuple[int, str, str | None]]) -> list[str]:
+    return [
+        fx.match_start("m-zone"),
+        _command_zone_line(objs),
+        fx.final_result(winner_match=1, games=((1, "ResultReason_Concede"),)),
+        fx.match_completed(),
+    ]
+
+
+def test_emblem_in_command_zone_is_not_a_commander():
+    """客户端会把徽记（Emblem）误写进主将区，不能被当成主将。
+
+    全量实测 33 份归档：Command 区只有 Card(317) 与 Emblem(16)，
+    后者恒为 grpId=2 / objectSourceGrpId=87496。
+    """
+    r = feed_lines(_brawl_lines([
+        (101, "96352", "GameObjectType_Card"),
+        (102, "2", "GameObjectType_Emblem"),
+    ]))
+    opp = [c for c in r.matches[0].commanders if c["seat"] == 2]
+    assert {c["grp_id"] for c in opp} == {"96352"}, "徽记不该被当成主将"
+
+
+def test_emblem_only_command_zone_yields_no_commander():
+    """主将区只有徽记时，应解析出 0 个主将，而不是 1 个伪主将。"""
+    r = feed_lines(_brawl_lines([(102, "2", "GameObjectType_Emblem")]))
+    opp = [c for c in r.matches[0].commanders if c["seat"] == 2]
+    assert opp == []
+
+
+def test_two_card_commanders_survive_filter():
+    """伙伴双主将（都是 Card）不受类型过滤影响。"""
+    r = feed_lines(_brawl_lines([
+        (101, "96352", "GameObjectType_Card"),
+        (102, "96353", "GameObjectType_Card"),
+    ]))
+    opp = [c for c in r.matches[0].commanders if c["seat"] == 2]
+    assert {c["grp_id"] for c in opp} == {"96352", "96353"}
+
+
+def test_missing_gameobject_type_is_tolerated():
+    """无 type 字段时必须照常解析——兼容合成日志与旧格式。"""
+    r = feed_lines(_brawl_lines([(101, "96352", None), (102, "96353", None)]))
+    opp = [c for c in r.matches[0].commanders if c["seat"] == 2]
+    assert {c["grp_id"] for c in opp} == {"96352", "96353"}
+
+
+def test_emblem_grpid_purged_on_connect(tmp_path):
+    """历史脏数据：徽记 grpId=2 曾被写成主将，重连时应被迁移清掉。
+
+    解析侧已按 GameObjectType 过滤（上面几条），但库里可能残留旧解析产物——
+    对手主将档案里那个永远查不到卡名的条目。迁移负责清历史数据。
+    """
+    db = tmp_path / "s.db"
+    conn = connect(db)
+    conn.execute("INSERT INTO matches(match_id) VALUES('m1')")
+    conn.execute("INSERT INTO commanders(match_id, seat, grp_id) VALUES('m1', 2, '2')")
+    conn.execute("INSERT INTO commanders(match_id, seat, grp_id) VALUES('m1', 2, '96352')")
+    conn.commit()
+    conn.close()
+
+    conn2 = connect(db)  # 重连触发 _migrate
+    got = {r[0] for r in conn2.execute("SELECT grp_id FROM commanders")}
+    conn2.close()
+    assert got == {"96352"}, f"徽记 grpId=2 应被清理，实得 {got}"
+
+
 def test_play_draw_when_opponent_starts():
     # 我 seat1，第 1 局 activePlayer=2 → 我后手
     lines = fx.bo1_match_lines(my_active=2)

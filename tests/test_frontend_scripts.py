@@ -29,6 +29,7 @@ CJS_TESTS = [
     "test_match_ui.cjs",
     "test_opponent_types_ui.cjs",
     "test_card_names_ui.cjs",
+    "test_commander_archetype_ui.cjs",
 ]
 
 

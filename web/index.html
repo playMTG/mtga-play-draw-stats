@@ -31,6 +31,15 @@ button:disabled{cursor:not-allowed;opacity:.5}
 .tag.win{background:#fbe9e7;color:var(--win)}
 .tag.loss{background:#e6f4ee;color:var(--loss)}
 .tag.abn{background:#fff4d6;color:var(--warn)}
+.arch-edit summary{cursor:pointer;font-size:11px;color:var(--muted);list-style:none}
+.arch-edit summary::-webkit-details-marker{display:none}
+.arch-edit summary::before{content:"+ ";color:var(--accent)}
+.arch-edit[open] summary::before{content:"− "}
+.arch-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;max-width:180px}
+.arch-chip{font-size:11px;line-height:1.5;padding:1px 7px;border-radius:10px;border:1px solid var(--border);background:var(--panel);color:var(--muted)}
+.arch-chip:hover{border-color:var(--muted)}
+.arch-chip.on{border-color:transparent}
+.arch-chip.clear{color:var(--loss)}
 .dim{margin:8px 0;font-size:13px}
 .dim .dim-head{display:flex;align-items:center;gap:8px}
 .dim .dim-name{width:64px;flex:none;font-weight:600}
@@ -122,37 +131,38 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </details>
 
 <p id="format-focus-note" class="ci" style="margin:0 0 10px" hidden></p>
-<section class="card" style="margin-bottom:14px">
-  <div class="bar"><h2 style="margin:0">每日战报</h2>
-    <button id="daily-today">今天</button><button id="daily-yesterday">昨天</button>
-    <input id="daily-date" type="date" aria-label="战报日期">
-    <button id="daily-matches">查看当天对局</button>
+<section class="card" style="margin-bottom:14px" data-page-node-id="HdlCFRAXVo1RfPPkLnV6qE">
+  <div class="bar"><h2 style="margin:0" data-page-node-id="5D6G08hNtghxgz3AfRTUXJ">每日战报与对局明细</h2>
+    <button id="d-today" class="on">今天</button><button id="d-yesterday">昨天</button>
+    <button id="d-all">全部日期</button>
+    <input id="d-date" type="date" aria-label="选择日期">
     <span id="daily-asof" class="ci"></span>
   </div>
-  <p id="daily-plain">正在读取本地战报…</p>
-  <button id="daily-latest" hidden>查看最近有记录的一天</button>
-  <details id="daily-evidence" hidden><summary>查看评语依据</summary><div id="daily-evidence-body"></div></details>
-  <div id="daily-summary" class="grid g3" style="margin:12px 0"></div>
-  <div id="daily-pd-streaks" style="margin:12px 0"></div>
-  <div id="daily-events"></div>
-  <section id="daily-history-section" hidden>
-    <h3>分赛事历史变化</h3>
-    <div id="daily-history-lead" class="summary-list"></div>
-    <details id="daily-history-details" class="detail-fold">
-      <summary>查看全部赛事、BO 模式与比较口径</summary>
-      <div id="daily-history-items"></div>
-      <p id="daily-history-note" class="ci"></p>
-    </details>
-  </section>
-  <details id="daily-quality-details" class="detail-fold" hidden><summary id="daily-quality-summary">资料说明</summary><div id="daily-quality" class="ci"></div></details>
-</section>
-<div class="card" style="margin-top:14px" data-page-node-id="HdlCFRAXVo1RfPPkLnV6qE">
-  <h2 data-page-node-id="5D6G08hNtghxgz3AfRTUXJ">对局明细 <span class="ci" id="m-count" data-page-node-id="dmRSFMQnP2ZzHBTduFYVus"></span></h2>
+
+  <div id="daily-block">
+    <p id="daily-plain">正在读取本地战报…</p>
+    <button id="daily-latest" hidden>查看最近有记录的一天</button>
+    <details id="daily-evidence" hidden><summary>查看评语依据</summary><div id="daily-evidence-body"></div></details>
+    <div id="daily-summary" class="grid g3" style="margin:12px 0"></div>
+    <div id="daily-pd-streaks" style="margin:12px 0"></div>
+    <div id="daily-events"></div>
+    <section id="daily-history-section" hidden>
+      <h3>分赛事历史变化</h3>
+      <div id="daily-history-lead" class="summary-list"></div>
+      <details id="daily-history-details" class="detail-fold">
+        <summary>查看全部赛事、BO 模式与比较口径</summary>
+        <div id="daily-history-items"></div>
+        <p id="daily-history-note" class="ci"></p>
+      </details>
+    </section>
+    <details id="daily-quality-details" class="detail-fold" hidden><summary id="daily-quality-summary">资料说明</summary><div id="daily-quality" class="ci"></div></details>
+  </div>
+  <div id="daily-all-note" class="ci" hidden>已选择「全部日期」。战报是单日口径，点选“今天”或某个具体日期即可查看当天战报；下方明细仍会列出全部记录。</div>
+
+  <hr style="border:0;border-top:1px solid var(--border);margin:16px 0 12px">
   <div class="bar">
-    <button id="m-today" class="on">今天</button><button id="m-yesterday">昨天</button>
-    <button id="m-all">全部日期</button>
     <label>分组 <select id="m-group"><option value="date">时间（默认）</option><option value="event">赛事</option><option value="deck">套牌</option><option value="commander">对手主将</option></select></label>
-    <span id="m-day-label" class="ci"></span>
+    <span class="ci" id="m-count"></span>
     <button id="m-prev">上一页</button><button id="m-more">下一页</button>
   </div>
   <div class="wrap" style="max-height:520px" data-page-node-id="ymn4s131NX2w1zt2AuMIH3"><table id="t-m" data-page-node-id="HIPQYBr3Z8NX4I7wFmjF9g"><thead data-page-node-id="ujlIBOeHLGQH0Y0KA5r038"><tr data-page-node-id="DRMXJ88SHu8Y803Bdn3mNf">
@@ -160,7 +170,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
     <th data-page-node-id="WdFRktwqhksIiF62XUIIu5">对手</th><th data-page-node-id="sDQPEeR4KpE8GC63iaJzHw">对手主将</th><th title="来源、调度、结束原因等">…</th>
   </tr></thead><tbody data-page-node-id="Axim8J5XWRqbDLXvwWIZN2"></tbody></table></div>
     <div class="ci" style="margin-top:6px">争锋显示日志中明确记录的主将；明确的非主将构筑赛事可逐场标注对手类型。轮抽、现开和规则未知赛事显示“不适用”，不会算作类型缺失。</div>
-</div>
+</section>
 
 <div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
   <div class="card"><h2>全史总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div></div>
@@ -207,7 +217,9 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </div>
 
 <div class="card" style="margin-top:14px" id="commander-card" data-page-node-id="kPjesv17VIdMGtagig7yNl">
-  <h2 data-page-node-id="oByOOJZ5zo46YL3sshCjSe">对手主将档案 <span class="ci" id="cmdr-hint" data-page-node-id="aM4Cgbw82CmIRRXcPtDhHb"></span></h2>
+  <div class="bar"><h2 style="margin:0" data-page-node-id="oByOOJZ5zo46YL3sshCjSe">对手主将档案 <span class="ci" id="cmdr-hint" data-page-node-id="aM4Cgbw82CmIRRXcPtDhHb"></span></h2>
+    <button id="cmdr-sort-count" class="on">按场次</button><button id="cmdr-sort-recent">按最近遇到</button>
+  </div>
   <details style="margin-bottom:10px"><summary>卡名显示与译名纠正</summary><p>中文优先，缺译名时保留英文。展开主将名称可查英文、本地牌库版本、译名阶段和卡牌编号。双面、连体、历险和隔间牌只要一个名称命中即可；未命中的部分继续显示英文。</p><p>可在插件目录 data/card_names.zh.json 按卡牌编号设置本地译名，保存后刷新。例如：</p><pre>{"123": {"name_zh": "我的译名", "source": "我的备注"}}</pre><p>删除条目恢复本地牌库译名。不同卡牌编号不因显示名相同而合并；stage 5 以下的机器候选默认不导入。</p></details>
 <div class="wrap" data-page-node-id="JMWgzRk6yebjUSM5lSdSB9"><table id="t-cmdr" data-page-node-id="qv3beE3lTfdWLZDf4IkuXA"><thead data-page-node-id="xVXeZuRypbSb3SrQlnLm1R"><tr data-page-node-id="kE6Pdi5Cy5vB8vmYRkyduR">
     <th data-page-node-id="eTpo7jI3M4SzDTj3rdIGxE">主将</th><th data-page-node-id="aAo5dcQXo8P39Lq4FVYBtg">类型</th><th data-page-node-id="J3yjDSpR61GM1rTFHMf2iH">场次</th><th data-page-node-id="0h9lUHKTqDjkUqaDy0avbv">胜率</th><th data-page-node-id="B4hZzEkXAAdeIQa4Uq9ZOQ">先手</th><th data-page-node-id="p8AgpIqedK14PbjIKKumla">后手</th><th data-page-node-id="3wAbEEEi2sF7f9joFoiBme">打标</th>

@@ -241,18 +241,53 @@ async function loadMulligans() {
 const ARCH_ZH = { Aggro: "快攻", Control: "控制", Combo: "组合技", Ramp: "Ramp", Midrange: "中速", Other: "其他" };
 const ARCH_COLOR = { Aggro: "#c94a3d", Control: "#5a7db8", Combo: "#8a63c9", Ramp: "#1a7f5a", Midrange: "#d18f4e", Other: "#6b7280" };
 
+function archTagList(a) {
+  // 类型是标签集合（同一主将可有多个玩法轴）；兼容旧的单值字符串
+  return Array.isArray(a) ? a.filter(Boolean) : (a ? [a] : []);
+}
+
 function archTag(a) {
-  if (!a) return `<span class="tag">未标</span>`;
-  return `<span class="tag" style="background:${ARCH_COLOR[a] || "#eef1f5"};color:#fff">${ARCH_ZH[a] || a}</span>`;
+  const tags = archTagList(a);
+  if (!tags.length) return `<span class="tag">未标</span>`;
+  return tags
+    .map((t) => `<span class="tag" style="background:${ARCH_COLOR[t] || "#eef1f5"};color:#fff">${esc(ARCH_ZH[t] || t)}</span>`)
+    .join(" ");
 }
 
 function archSelect(key, current) {
-  const opts = ["", ...Object.keys(ARCH_ZH)]
-    .map((k) => `<option value="${k}" ${k === (current || "") ? "selected" : ""}>${k ? ARCH_ZH[k] : "(清除)"}</option>`)
-    .join("");
-  // 主将名可能含单引号（如 Harvest's Hand），inline onchange 需转义防语法炸
+  const tags = archTagList(current);
+  // 主将名可能含单引号（如 Harvest's Hand），inline onclick 需转义防语法炸
   const safe = key.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-  return `<select onchange="tagOpp('${safe}', this.value)">${opts}</select>`;
+  const chips = Object.keys(ARCH_ZH)
+    .map((k) => {
+      const on = tags.includes(k);
+      const style = on ? `background:${ARCH_COLOR[k]};color:#fff` : "";
+      return `<button type="button" class="arch-chip${on ? " on" : ""}" data-tag="${k}" style="${style}"`
+        + ` onclick="toggleOppTag(this,'${safe}','${k}')">${ARCH_ZH[k]}</button>`;
+    })
+    .join("");
+  const label = tags.length ? `打标（${tags.length}）` : "打标";
+  return `<details class="arch-edit"><summary>${label}</summary>`
+    + `<div class="arch-chips">${chips}`
+    + `<button type="button" class="arch-chip clear" onclick="toggleOppTag(this,'${safe}','')">清除</button>`
+    + `</div></details>`;
+}
+
+async function toggleOppTag(el, key, tag) {
+  const box = el.closest(".arch-chips");
+  if (!box) return;
+  let next;
+  if (tag === "") {
+    next = [];
+  } else {
+    const on = new Set(
+      [...box.querySelectorAll(".arch-chip.on")].map((b) => b.dataset.tag).filter(Boolean)
+    );
+    if (on.has(tag)) on.delete(tag);
+    else on.add(tag);
+    next = Object.keys(ARCH_ZH).filter((k) => on.has(k));  // 统一按固定顺序存
+  }
+  await tagOpp(key, next.join(","));
 }
 
 function matchArchSelect(row) {
@@ -282,15 +317,17 @@ async function tagOpp(key, tag) {
   if (j.ok) reload(); else alert(j.error || "保存失败，请重试");
 }
 
+let cmdrSort = "count";  // count=按场次 / recent=按最近遇到
+
 async function loadCommanders() {
   const v = uiVersion;
-  const j = await api("/api/commanders");
+  const j = await api("/api/commanders", { sort: cmdrSort });
   if (isStale(v)) return;
   const c = j.rows || [];
   const cov = j.coverage;
   let hint = "";
   if (c.length) {
-    const auto = c.filter((r) => r.archetype).length;
+    const auto = c.filter((r) => archTagList(r.archetype).length).length;
     hint = `共 ${c.length} 位对手主将（${auto} 位已有类型）`;
     // 覆盖率明示：主将 grpId 只在本地日志里存在，云史对局没有该字段，
     // 不注明会被误读成"解析丢数据"（如 1000+ 场争锋只统计到个位数对手）
@@ -306,7 +343,7 @@ async function loadCommanders() {
       (r) => {
         const delta = r.on_play.n && r.on_draw.n ? (r.on_play.wr - r.on_draw.wr) : null;
         return `<tr>
-        <td><details><summary>${cardMarkup(r)}</summary><div class="ci">${esc(r.name_en || "英文未记录")}<br>${esc(r.name_source)} · grpId:${esc(r.key)}</div></details></td>
+        <td><details><summary>${cardMarkup(r)}</summary><div class="ci">${esc(r.name_en || "英文未记录")}<br>${esc(r.name_source)} · grpId:${esc(r.key)}${r.last_time ? `<br>最近相遇：${fmtTime(r.last_time)}` : ""}</div></details></td>
         <td>${archTag(r.archetype)}</td>
         <td class="num">${r.n}</td>
         <td class="num" style="color:${(r.wr ?? 0) >= 50 ? "var(--win)" : "var(--loss)"}">${r.wr ?? "–"}%</td>
@@ -318,6 +355,14 @@ async function loadCommanders() {
     )
     .join("") || `<tr><td colspan="7" class="ci">暂无主将数据</td></tr>`;
 }
+
+function syncCmdrSortBtns() {
+  $("cmdr-sort-count")?.classList.toggle("on", cmdrSort === "count");
+  $("cmdr-sort-recent")?.classList.toggle("on", cmdrSort === "recent");
+}
+$("cmdr-sort-count").addEventListener("click", () => { cmdrSort = "count"; syncCmdrSortBtns(); loadCommanders(); });
+$("cmdr-sort-recent").addEventListener("click", () => { cmdrSort = "recent"; syncCmdrSortBtns(); loadCommanders(); });
+syncCmdrSortBtns();
 
 async function loadOpponentTypes() {
   const v = uiVersion;
@@ -438,7 +483,6 @@ async function loadMatches() {
   const m = await api("/api/matches", { limit: matchLimit, offset: matchOffset, ...(matchDay ? {day:matchDay} : {}) });
   if (isStale(v)) return;
   $("m-count").textContent = `共 ${m.total} 场（本页 ${m.rows.length} 场，第 ${Math.floor(matchOffset / matchLimit) + 1} 页）`;
-  $("m-day-label").textContent = matchDay ? matchDay : "全部日期";
   $("m-more").disabled = matchOffset + m.rows.length >= m.total;
   $("m-prev").disabled = matchOffset === 0;
   const mode = $("m-group").value;
@@ -677,9 +721,13 @@ async function loadDeckDetail() {
 
 function jumpToDaily(day) {
   if (!day) return;
-  $("daily-date").value = day;
+  matchDay = day;
+  $("d-date").value = day;
+  matchOffset = 0;
+  syncMatchDayBtns();
   loadDaily();
-  const el = document.getElementById("daily-section") || document.querySelector("#daily-date");
+  loadMatches();
+  const el = $("daily-block") || $("d-date");
   if (el && el.scrollIntoView) el.scrollIntoView({behavior:"smooth", block:"start"});
 }
 
@@ -750,8 +798,18 @@ function dailyQualityView(summary, report) {
 
 let dailyRequest = 0, dailyScope = "", dailyLatest = null;
 async function loadDaily() {
+  // 「全部日期」下战报无意义（战报是单日口径）：藏起战报区，只留下方明细
+  if (!matchDay) {
+    dailyScope = "";
+    $("daily-block").hidden = true;
+    $("daily-all-note").hidden = false;
+    $("daily-asof").textContent = "";
+    return;
+  }
+  $("daily-block").hidden = false;
+  $("daily-all-note").hidden = true;
   const request = ++dailyRequest;
-  const scope = `${params()}|${$("daily-date").value}`;
+  const scope = `${params()}|${matchDay}`;
   if (dailyScope !== scope) {
     $("daily-evidence").hidden = true;
     $("daily-evidence").open = false;
@@ -765,11 +823,11 @@ async function loadDaily() {
     $("daily-quality-details").open = false;
   }
   dailyScope = scope;
-  const extra = $("daily-date").value ? {day:$("daily-date").value} : {};
+  const extra = { day: matchDay };
   let r;
   try { r = await api("/api/daily", extra); }
   catch (error) {
-    if (request === dailyRequest && scope === `${params()}|${$("daily-date").value}`) {
+    if (request === dailyRequest && scope === `${params()}|${matchDay}`) {
       $("daily-plain").textContent = "战报读取失败，请重试。";
       $("daily-plain").className = "";
       $("daily-evidence").hidden = true;
@@ -778,9 +836,11 @@ async function loadDaily() {
     }
     return;
   }
-  if (request !== dailyRequest || scope !== `${params()}|${$("daily-date").value}`) return;
+  if (request !== dailyRequest || scope !== `${params()}|${matchDay}`) return;
   const s = r.summary;
-  $("daily-date").value = r.date;
+  matchDay = r.date;
+  $("d-date").value = r.date;
+  syncMatchDayBtns();
   dailyScope = `${params()}|${r.date}`;
   dailyLatest = r.latest_date;
   $("daily-latest").hidden = s.n > 0 || !dailyLatest;
@@ -793,7 +853,8 @@ async function loadDaily() {
       + rows.map(x => `<p>${fmtTime(x.start_time)} · ${esc(x.my_deck_tag || "套牌未记录")} · ${eventMarkup(x.event_id, x.event_label)} · ${{play:"先手",draw:"后手"}[x.play_draw] || "先后手未记录"} · ${{win:"胜",loss:"负"}[x.my_result] || "结果待确认"}${x.commander_names.length ? ` · ${cardsMarkup(x.commander_cards, x.commander_names)}` : ""}</p>`).join("");
   }).join("");
   $("daily-asof").textContent = r.is_today ? "截至目前的已记录对局" : "历史日战报";
-  $("daily-plain").textContent = r.plain;
+  $("daily-plain").textContent = r.plain || "";
+  $("daily-plain").hidden = !r.plain;  // 有对局但无亮点时后端给空串，不留空段落
   const dailyLevel = r.highlights?.[0]?.level;
   $("daily-plain").className = dailyLevel ? `daily-highlight ${dailyLevel}` : "";
   const pd = r.play_draw;
@@ -1092,21 +1153,32 @@ loadFilters().then(reload).catch((e) => {
     `<div class="card" style="border-color:#c94a3d">加载失败：${e.message}<pre style="white-space:pre-wrap;font-size:11px">${e.stack || ""}</pre></div>`
   );
 });
-$("daily-date").addEventListener("change", loadDaily);
-$("daily-latest").addEventListener("click", () => {if(dailyLatest) {$("daily-date").value=dailyLatest;loadDaily();}});
-$("daily-today").addEventListener("click", () => {$("daily-date").value=localDay(new Date());loadDaily();});
-$("daily-yesterday").addEventListener("click", () => {const d=new Date();d.setDate(d.getDate()-1);$("daily-date").value=localDay(d);loadDaily();});
-$("daily-matches").addEventListener("click", () => {matchDay=$("daily-date").value;matchOffset=0;loadMatches();});
-$("m-today").addEventListener("click", () => {matchDay=localDay(new Date());matchOffset=0;syncMatchDayBtns();loadMatches();});
-$("m-yesterday").addEventListener("click", () => {const d=new Date();d.setDate(d.getDate()-1);matchDay=localDay(d);matchOffset=0;syncMatchDayBtns();loadMatches();});
-$("m-all").addEventListener("click", () => {matchDay="";matchOffset=0;syncMatchDayBtns();loadMatches();});
+// 日期筛选：战报与对局明细共用同一份状态，改一次两边一起刷新
+function refreshDay() {
+  loadDaily();
+  loadMatches();
+}
+function setDay(day) {
+  matchDay = day || "";
+  $("d-date").value = matchDay;
+  matchOffset = 0;
+  syncMatchDayBtns();
+  refreshDay();
+}
+$("d-date").addEventListener("change", () => setDay($("d-date").value));
+$("daily-latest").addEventListener("click", () => { if (dailyLatest) setDay(dailyLatest); });
+$("d-today").addEventListener("click", () => setDay(localDay(new Date())));
+$("d-yesterday").addEventListener("click", () => {
+  const d = new Date(); d.setDate(d.getDate() - 1); setDay(localDay(d));
+});
+$("d-all").addEventListener("click", () => setDay(""));
 function syncMatchDayBtns() {
   const today = localDay(new Date());
   const y = new Date(); y.setDate(y.getDate()-1);
   const yesterday = localDay(y);
-  $("m-today")?.classList.toggle("on", matchDay === today);
-  $("m-yesterday")?.classList.toggle("on", matchDay === yesterday);
-  $("m-all")?.classList.toggle("on", !matchDay);
+  $("d-today")?.classList.toggle("on", matchDay === today);
+  $("d-yesterday")?.classList.toggle("on", matchDay === yesterday);
+  $("d-all")?.classList.toggle("on", !matchDay);
 }
 syncMatchDayBtns();
 $("m-group").addEventListener("change", loadMatches);

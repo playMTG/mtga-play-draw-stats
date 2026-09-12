@@ -24,15 +24,19 @@ from app import main, store
 
 @pytest.fixture
 def isolated_main(tmp_path, monkeypatch):
-    """把 main 的全局连接状态隔离到临时库，跑完还原。"""
-    monkeypatch.setattr(main.cfg.__class__, "db_path", property(lambda self: tmp_path / "s.db"))
-    monkeypatch.setattr(main.cfg.__class__, "root", property(lambda self: tmp_path))
+    """把 main 的全局连接状态隔离到临时库，跑完还原。
+
+    注意：Config.root 是实例属性，Config.db_path 是 property——
+    后者只能改在类上（property 没有 setter，改实例会 TypeError）。
+    """
+    monkeypatch.setattr(main.cfg, "root", tmp_path)
+    monkeypatch.setattr(type(main.cfg), "db_path", property(lambda self: tmp_path / "s.db"))
     monkeypatch.setattr(main, "_conn", None)
     yield tmp_path
     monkeypatch.setattr(main, "_conn", None)
 
 
-def test_get_conn_builds_only_one_connection(tmp_path, monkeypatch):
+def test_get_conn_builds_only_one_connection(isolated_main, monkeypatch):
     """并发调用 get_conn 只能建出一个连接，且所有调用方拿到同一个对象。"""
     monkeypatch.setattr(main, "_conn", None)
     calls: list[int] = []
@@ -64,7 +68,7 @@ def test_get_conn_builds_only_one_connection(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_conn", None)
 
 
-def test_get_conn_does_not_deadlock_inside_db_lock(tmp_path, monkeypatch):
+def test_get_conn_does_not_deadlock_inside_db_lock(isolated_main, monkeypatch):
     """q() 会在持有 _db_lock 时调用 get_conn()；两者必须用不同的锁。"""
     monkeypatch.setattr(main, "_conn", None)
 

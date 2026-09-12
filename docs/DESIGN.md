@@ -372,5 +372,24 @@ parse_tags("Ramp,Bogus")  -> ["Ramp"]     # 非法标签只丢那一个
 
 **测试**：`tests/test_daily_ui.cjs` 用 `vm` 跑 `loadDaily` 片段，断言旧响应与作用域不匹配的响应都被丢弃、赛事名与历史条正确渲染，以及「全部日期不再请求 `/api/daily`」。注意 `matchDay` 与 `syncMatchDayBtns` 定义在切片之外，测试需显式注入。
 
+### R13.4 区块加载独立容错
+
+**问题**：`reload()` 用 `Promise.all` 并发跑九个 loader，任一抛错就让页面顶部出现一条红色横幅，内容是 `app.js` 内部的行号与堆栈——**看不出是哪个区块坏了**，而且看起来像整个面板都挂了（实测撞到过一次：服务进程陈旧导致 `loadDaily` 读到缺失字段）。其余区块其实照常渲染了，只是被这条横幅盖住了。
+
+**改法**：`Promise.allSettled` + 汇总提示。
+
+```js
+const results = await Promise.allSettled(
+  RELOAD_SECTIONS.map(([, fn]) => Promise.resolve().then(fn)));
+```
+
+- `Promise.resolve().then(fn)` 包一层：即使某个 loader **同步**抛错也会变成 rejected promise，不会在 `map` 阶段炸掉整个 `reload`。
+- 失败的区块名与错误消息汇总进 `#load-error`，逐个点名；未失败的区块不出现。
+- **筛选条件取不到**是另一种性质：那时 `reload()` 根本不会开始，页面什么都加载不出来。所以 `reportLoadFailures(..., fatal=true)` 把标题改成「页面未能初始化」，避免用户误以为只是某个区块坏了。
+
+**取舍**：没有把失败改成静默——失败区块仍被点名，只是不再独占整页。「响亮失败」保留，只是把音量调到与影响面匹配。
+
+**测试**：`tests/test_load_error_ui.cjs` 断言「一个区块失败不阻止其余八个加载」「未失败的区块不被点名」「致命态标题不同」「恢复成功后错误区自动收起」；已用「临时退回 `Promise.all` → 断言失败 → 还原」验证过能捕获。
+
 
 

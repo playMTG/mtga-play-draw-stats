@@ -1039,11 +1039,38 @@ $("card-names-seed").addEventListener("click", async () => {
   setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 2500);
 });
 
+// 每个区块独立容错：早前用 Promise.all，任一 loader 抛错就整页只剩一条堆栈横幅，
+// 而横幅里全是 app.js 内部的行号，看不出是哪个区块坏了（实测撞到过一次）。
+// 改成 allSettled + 汇总提示：失败要看得见，但不该拖垮其余内容（R13.4）。
+const RELOAD_SECTIONS = [
+  ["总览", loadOverview], ["调度", loadMulligans], ["对手主将", loadCommanders],
+  ["对手类型", loadOpponentTypes], ["对局明细", loadMatches], ["运行状态", loadStatus],
+  ["段位曲线", loadRankCurve], ["被针对指数", loadTargeting], ["每日战报", loadDaily],
+];
+
 async function reload() {
-  await Promise.all([
-    loadOverview(), loadMulligans(), loadCommanders(), loadOpponentTypes(), loadMatches(), loadStatus(),
-    loadRankCurve(), loadTargeting(), loadDaily(),
-  ]);
+  const results = await Promise.allSettled(
+    RELOAD_SECTIONS.map(([, fn]) => Promise.resolve().then(fn)));
+  reportLoadFailures(
+    RELOAD_SECTIONS.map(([name], i) => [name, results[i]])
+      .filter(([, r]) => r.status === "rejected")
+      .map(([name, r]) => [name, r.reason]),
+  );
+}
+
+function reportLoadFailures(failed, fatal = false) {
+  const box = $("load-error");
+  if (!box) return;
+  box.hidden = !failed.length;
+  if (!failed.length) {
+    $("load-error-body").innerHTML = "";
+    return;
+  }
+  $("load-error-title").textContent = fatal ? "页面未能初始化" : "部分区块加载失败";
+  $("load-error-body").innerHTML = failed
+    .map(([name, err]) => `<p><strong>${esc(name)}</strong>：${esc((err && err.message) || String(err))}</p>`)
+    .join("")
+    + (fatal ? "" : `<p class="ci">其余区块已正常加载；刷新页面可重试。</p>`);
 }
 
 // ---------- 你被针对了吗（§3.5） ----------
@@ -1148,10 +1175,8 @@ for (const [id, w] of [["ti-7", "7"], ["ti-30", "30"], ["ti-all", "all"]]) {
 }
 
 loadFilters().then(reload).catch((e) => {
-  document.body.insertAdjacentHTML(
-    "afterbegin",
-    `<div class="card" style="border-color:#c94a3d">加载失败：${e.message}<pre style="white-space:pre-wrap;font-size:11px">${e.stack || ""}</pre></div>`
-  );
+  // 筛选都取不到时，reload 根本不会开始，所以要说明是整页没起来（R13.4）
+  reportLoadFailures([["筛选条件", e]], true);
 });
 // 日期筛选：战报与对局明细共用同一份状态，改一次两边一起刷新
 function refreshDay() {

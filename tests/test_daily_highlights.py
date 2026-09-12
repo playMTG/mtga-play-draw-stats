@@ -43,6 +43,18 @@ def test_empty_and_single_unknown_keeps_fallback():
     assert facts[0]['match_ids'] == ['1']
 
 
+def test_no_strong_signal_returns_empty():
+    """有对局但没有值得一提的信号时返回空列表。
+
+    7 场 4 胜 3 负、先后手交错：够不到高胜率（4/7≈57%，要 ≥70%）、够不到场次门槛
+    （<10）、没有先后手偏斜、没有连续段、没有重复主将。旧版在这里会补一句
+    「这一天已记录 7 场，4 胜 3 负」——那是下方统计卡已经逐项列过的数字（用户反馈）。
+    """
+    rows = [row(i, pd='play' if i % 2 == 0 else 'draw',
+                result='win' if i % 2 == 0 else 'loss') for i in range(7)]
+    assert highlights(rows) == []
+
+
 def test_seven_all_draw_is_legendary_tone():
     facts = highlights([row(i, pd='draw') for i in range(7)])
     streak = next(f for f in facts if f['kind'] == 'play_draw_streak')

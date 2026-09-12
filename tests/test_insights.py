@@ -245,6 +245,27 @@ def test_daily_highlight_scope_evidence_and_empty_date(db):
     assert empty['latest_date']==day.isoformat()
 
 
+def test_daily_plain_empty_when_no_highlight(db):
+    """有对局但无亮点时 plain 留空串（前端据此隐藏段落），别退回战绩复读。
+
+    7 场 4 胜 3 负、先后手交错 → highlights 为空。旧版会填「这一天已记录 7 场，
+    4 胜 3 负」，那个数字下方统计卡已逐项列出。同时确认「无对局」那句提示没被
+    这个改动顺手清掉——两种空是不同性质的。
+    """
+    day=datetime.now().date()
+    for i in range(7):
+        add(db,f'plain{i}',day,pd='play' if i%2==0 else 'draw',
+            result='win' if i%2==0 else 'loss')
+    r=daily_report(db,day.isoformat())
+    assert r['summary']['n']==7 and r['summary']['wins']==4 and r['summary']['losses']==3
+    assert r['highlights']==[]
+    assert r['plain']==''
+    # 无对局的日子仍然给一句说明
+    none_day=daily_report(db,(day-timedelta(days=1)).isoformat())
+    assert none_day['summary']['n']==0
+    assert none_day['plain']=='这一天在当前筛选下没有已记录对局。'
+
+
 def test_daily_streaks_history_cutoff_scope_and_bo3(db):
     day=datetime.now().date()
     add(db,'old',day-timedelta(days=1),pd='draw')

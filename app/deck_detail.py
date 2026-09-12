@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 import sqlite3
 
 from .card_names import CardNames
+from .deck_names import derived_label, label_for, limited_labels
 from .deck_observations import deck_observations
 from .event_names import friendly_event
 from .stats import is_constructed_opponent_event, wr
@@ -354,8 +355,16 @@ def deck_detail(conn: sqlite3.Connection, *, deck: str | None = None,
                             if _clean(row["my_deck_tag"])), None)
         title = recent_name or title
 
+    # 限制赛的临时牌组：客户端只给通用名（"轮抽套牌" 等），250 次 draft 同名。
+    # 命中「限制赛 + 名字不唯一」时改用「轮抓 · 首次对局时间」，并据此收掉
+    # 下面那条「另有 N 场同名记录未合并」——那些本来就是不同的 draft。
+    deck_labels = limited_labels(conn)
+    derived = derived_label(ids, deck_labels)
+    if derived:
+        title = derived
+
     same_name_unlinked = 0
-    if reliable and anchor_name:
+    if reliable and anchor_name and not derived:
         same_name_unlinked = sum(
             _clean(row["my_deck_tag"]) == anchor_name and i not in members
             and _visible(row, exclude_abnormal, exclude_bot)
@@ -436,6 +445,7 @@ def deck_detail(conn: sqlite3.Connection, *, deck: str | None = None,
         "play_draw": row["play_draw"],
         "my_result": row["my_result"],
         "my_deck_tag": row["my_deck_tag"],
+        "my_deck_label": label_for(row["my_deck_tag"], row["my_deck_id"], deck_labels),
         "my_deck_version": row["my_deck_version"],
         "source": row["source"],
         "match_mode": row["match_mode"] or "未知",
@@ -454,6 +464,9 @@ def deck_detail(conn: sqlite3.Connection, *, deck: str | None = None,
         identity_note = "这些记录缺少套牌 ID 和构筑指纹，暂按套牌名称汇总，可能包含同名套牌。"
     if picked_by_name:
         identity_note += " 从这个名称最近使用的可靠身份进入。"
+    if derived:
+        identity_note += (f" 客户端对限制赛牌组只给通用名（这里是「{anchor_name}」），"
+                          f"已按套牌 ID 与首次对局时间区分为「{derived}」。")
     if same_name_unlinked:
         identity_note += f" 另有 {same_name_unlinked} 场同名记录无法与此身份连接，未合并。"
 

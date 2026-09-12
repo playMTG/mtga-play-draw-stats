@@ -443,7 +443,9 @@ function gameDetails(r) {
 }
 
 function deckLink(r, label) {
-  const name = label || r.my_deck_tag || "套牌未记录";
+  // my_deck_label 是后端对限制赛临时牌组给出的可区分名（"轮抓 · 2024-10-05 21:03"）；
+  // 客户端只给通用名「轮抽套牌」时，250 次 draft 在明细里根本分不清（V1）。
+  const name = label || r.my_deck_label || r.my_deck_tag || "套牌未记录";
   if (!(r.my_deck_tag || r.my_deck_id || r.my_deck_version)) return esc(name);
   const payload = encodeURIComponent(JSON.stringify({
     deck: r.my_deck_tag || "", deck_id: r.my_deck_id || "",
@@ -463,7 +465,7 @@ function matchRow(r) {
   return `<tr>
     <td>${fmtTime(r.start_time)}</td>
     <td>${eventMarkup(r.event_id, r.event_label)} <span class="ci">${gameDetails(r)}</span></td>
-    <td class="clip" title="${esc(r.my_deck_tag || "套牌未记录")}">${deckLink(r)}</td>
+    <td class="clip" title="${esc(r.my_deck_label || r.my_deck_tag || "套牌未记录")}">${deckLink(r)}</td>
     <td>${ownCommander}</td>
     <td>${r.play_draw === "play" ? "先手" : r.play_draw === "draw" ? "后手" : "–"}</td>
     <td>${r.my_result === "win" ? "胜" : r.my_result === "loss" ? "负" : "待确认"}</td>
@@ -510,7 +512,7 @@ function deckVersionLabel(value, versions) {
 function deckRecordRow(row, versions) {
   return `<tr><td>${fmtTime(row.start_time)}</td><td>${eventMarkup(row.event_id, row.event_label)}</td>
     <td>${gameDetails(row)}</td>
-    <td>${esc(row.my_deck_tag || "未命名")}</td>
+    <td>${esc(row.my_deck_label || row.my_deck_tag || "未命名")}</td>
     <td title="${esc(row.my_deck_version || "构筑版本未记录")}">${esc(deckVersionLabel(row.my_deck_version, versions))}</td>
     <td>${opponentProfileMarkup(row, row.opponent_cards)}</td>
     <td>${row.play_draw === "play" ? "先手" : row.play_draw === "draw" ? "后手" : "未知"}</td>

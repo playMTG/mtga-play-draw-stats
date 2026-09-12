@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .event_names import friendly_event
 from .card_names import CardNames
+from .deck_names import label_for, limited_labels
 
 from .targeting import (binom_cdf, binom_sf, chi2_sf, luck_label,
                         max_loss_streak, p_to_score, streak_sf)
@@ -561,6 +562,7 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
     ).fetchall()
     games_by_match: dict[str, list[dict]] = {r["match_id"]: [] for r in rows}
     match_ids = list(games_by_match)
+    deck_labels = limited_labels(conn)
     for start in range(0, len(match_ids), 500):
         batch = match_ids[start:start + 500]
         if not batch:
@@ -608,6 +610,9 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                 "my_deck_tag": r["my_deck_tag"],
                 "my_deck_id": r["my_deck_id"],
                 "my_deck_version": r["my_deck_version"],
+                # 限制赛的通用占位名（"轮抽套牌" 等）不足以区分 250 次 draft，
+                # 这里给出「轮抓 · 首次对局时间」形态的可区分名（V1）。
+                "my_deck_label": label_for(r["my_deck_tag"], r["my_deck_id"], deck_labels),
                 "source": r["source"],
                 "match_mode": r["match_mode"] or "未知",
                 "opponent_type_eligible": is_constructed_opponent_event(r["event_id"]),

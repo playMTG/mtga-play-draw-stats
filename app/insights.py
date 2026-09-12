@@ -114,7 +114,12 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
     return {'date': chosen.isoformat(), 'is_today': chosen == today,
             'play_draw': {'day': distribution(selected), 'day_streaks': streaks(selected),
                           'history_streaks': streaks(through_day)},
-            'summary': summary, 'plain': ' '.join(f['text'] for f in facts) if facts else '这一天在当前筛选下没有已记录对局。', 'events': groups,
+            'summary': summary,
+            # 有对局但没有亮点时留空：旧版会补一句「已记录 N 场，X 胜 Y 负」，
+            # 而那个数字下方统计卡已逐项列出（用户反馈为无意义复读）。
+            'plain': ' '.join(f['text'] for f in facts) if facts
+                     else ('这一天在当前筛选下没有已记录对局。' if not selected else ''),
+            'events': groups,
             'highlights': facts,
             'highlight_records': [{k: r[k] for k in ('match_id','start_time','event_id','event_label','my_deck_tag','play_draw','my_result','commander_names','commander_cards')} for r in selected if r['match_id'] in evidence_ids],
             'latest_date': max((d for d in dates if d <= today.isoformat()), default=None),

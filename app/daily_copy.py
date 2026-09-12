@@ -60,9 +60,6 @@ TEMPLATES = {
         "{name}：怎么又是你",
         "跟 {name} 的孽缘又续上了",
     ],
-    "results": [
-        "这一天已记录 {n} 场，{wins} 胜 {losses} 负",
-    ],
     "volume_marathon": [
         "今天是真·耐力局，一口气 {n} 场",
         "肝了一整天，记录里整整 {n} 场",

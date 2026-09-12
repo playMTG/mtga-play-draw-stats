@@ -82,13 +82,6 @@ def highlights(rows):
     rows = sorted(rows, key=lambda r: (r["start_time"], r["match_id"]))
     n = len(rows)
     wins = sum(r["my_result"] == "win" for r in rows)
-    losses = sum(r["my_result"] == "loss" for r in rows)
-    unknown = n - wins - losses
-    result = pick(
-        "results",
-        ["results", str(n), str(wins), str(losses)],
-        n=n, wins=wins, losses=losses,
-    ) + (f"，{unknown} 场结果待确认" if unknown else "")
     candidates = []
 
     def add(kind, text, evidence, denominator, **extra):
@@ -115,7 +108,7 @@ def highlights(rows):
         text = pick(key, [r0["match_id"], key], side=pd)
         if r0["play_draw"] in ("play", "draw") and text and pd not in text:
             text = f"{text}（{pd}）"
-        text = text or (result + f"，{pd}")
+        text = text or pd
         add("single", text, rows, n)
         return candidates
 
@@ -208,8 +201,6 @@ def highlights(rows):
                 len(identified) or n,
             )
 
-    add("results", result, rows, n)
-
     def _rank(c):
         k = c["kind"]
         if k == "volume":
@@ -224,13 +215,10 @@ def highlights(rows):
             return 5
         return 6
 
-    non_results = [c for c in candidates if c["kind"] != "results"]
-    non_results = _filter_for_volume(non_results, n, volume)
-    non_results.sort(key=lambda c: (_rank(c), -c["n"]))
-    results = next(c for c in candidates if c["kind"] == "results")
-    top = non_results[:2]
-    if not top:
-        return [results]
-    if len(top) == 1:
-        top = top + [results]
-    return top
+    # 只保留真正的亮点；不再补一句「这一天已记录 N 场，X 胜 Y 负」——
+    # 那个数字在下方统计卡里已逐项列出，放进评语纯属复读（用户反馈）。
+    # 没有亮点时返回空列表，由 insights.daily_report 决定 plain 的呈现。
+    top = [c for c in candidates if c["kind"] != "results"]
+    top = _filter_for_volume(top, n, volume)
+    top.sort(key=lambda c: (_rank(c), -c["n"]))
+    return top[:2]

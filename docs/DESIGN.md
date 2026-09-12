@@ -298,3 +298,79 @@ threading.Thread(target=_boot_tasks, daemon=True).start()
 **测试**：`tests/test_startup_concurrency.py` 用 `Barrier` 让 8／6 个线程同时冲进上述路径，断言只建 1 个连接、只起 1 个回填线程；另有一条用源码缩进断言 `tag_bot_decks` 处于锁内。三条关键用例都已用「临时回退修复 → 断言失败 → 还原」验证过不是空转。
 
 
+## R13 争锋主将档案增强
+
+R13 由三个可独立验收的点组成，按 R13.1 → R13.2 → R13.3 推进。
+
+### R13.1 主将区只认卡牌（徽记过滤）
+
+**问题**：客户端会把徽记（Emblem）也塞进 `ZoneType_Command` 的 `objectInstanceIds`。徽记恒为 `grpId=2` / `objectSourceGrpId=87496`，旧解析把它当成第二个主将写进 `commanders`。全量实测 33 份归档：Command 区只有 `Card`(317) 与 `Emblem`(16) 两种 `GameObjectType`。
+
+**解析侧**（`events._on_commanders`）：只认 `GameObjectType_Card`；`type` 字段缺失时**放行**，兼容合成日志与旧格式。
+
+**历史残留**（`store._migrate`）：重连时 `DELETE FROM commanders WHERE grp_id = '2'`。`grpId=2` 不可能是合法卡牌——客户端 `Raw_CardDatabase` 的 `Cards` 最小 `GrpId` 为 6，本机卡名库最小为 6873，两处都查不到 2。
+
+**实测影响**：本机库里那一行落在**我方座位**（`seat = my_seat`），所以没有污染对手档案，而是混进了 CSV 导出的「我方主将」列（`export_rows` 的 `my_cmdrs` 子查询按 `c.seat = m.my_seat` 取 `GROUP_CONCAT`）；对手座位上的伪主将则由解析层用例覆盖。迁移实测 `commanders` 3515 → 3514，逐行核对确认只删掉那一行。
+
+**测试**：`tests/test_core.py` 四条解析用例（徽记被过滤／只有徽记时解析出 0 个主将／伙伴双主将不受影响／无 `type` 字段照常解析）加一条重连迁移用例。
+
+### R13.2 类型多标签
+
+**问题**：争锋里很多卡组有多种玩法轴——始霸埃泰力既是 Ramp 也是组合技，拿杜既是组合技也靠加速。原来的类型字段是**严格单值**的（`ARCH_KEYS` 里的一个字符串），一场对局／一个主将只能落进一个类型，表达不了这种多轴卡组。
+
+#### 存储格式
+
+标签集合序列化为**逗号分隔串**（`"Ramp,Combo"`）。单标签时就是它自己，因此**旧数据无需迁移**——`"Combo"` 读出来就是 `["Combo"]`。
+
+```python
+parse_tags(None)          -> []
+parse_tags("Ramp,Combo")  -> ["Ramp", "Combo"]
+parse_tags(["Combo"])     -> ["Combo"]
+parse_tags("Ramp,Bogus")  -> ["Ramp"]     # 非法标签只丢那一个
+```
+
+`commander_archetypes.json` 的**值支持两种形态**，向后兼容：
+
+```json
+{ "Nadu, Winged Wisdom": "Combo",
+  "Etali, Primal Conqueror": ["Combo", "Ramp"] }
+```
+
+#### 统计口径：重叠计数
+
+一场标了 `Ramp,Combo` 的对局，在按类型聚合时**两个类型各计一次**，两侧分母都包含它。这样「遇到这类玩法时的胜率」才准确，代价是各类场次之和会超过总场次——UI 上需要说明。
+
+#### 优先级与覆盖
+
+手动打标（`opponent_profiles.archetype_user`）**整体覆盖**先验：在 UI 上给某主将加一个轴，会替换掉先验里的全部标签，不是增量追加。清除手动标即可回落到先验。
+
+#### 本次范围
+
+**只改争锋主将档案链路**：先验表 + 主将档案打标控件。
+
+非主将构筑的逐场标签（`matches.opp_archetype_tag`）**保持单选**，`opponent_type_stats` 的按 `==` 分组逻辑未动。
+
+注意 `opp_tag_by_name` 给争锋主将打标时仍会回填 `matches.opp_archetype_tag`（可能写入多值）；这些场次都是 Brawl，而 `is_constructed_opponent_event` 对 Brawl 返回 False，**不进非主将构筑统计的分母**，故不受影响。
+
+#### 前端
+
+`archTag()` 接受数组，逐标签渲染 chip；`archSelect()` 改为 `<details>` 折叠 + chip 组多选，点击即 toggle 并提交整个集合（`toggleOppTag` 按 `ARCH_ZH` 固定顺序收集，保证存储稳定）。
+
+**测试**：`tests/test_commander_archetype_ui.cjs`（渲染层，含单值兼容、多 chip、空集合、单引号转义）与 `tests/test_matchups.py` 的 `parse_tags`／多标签先验／手动覆盖用例。
+
+### R13.3 战报与明细共用日期
+
+**问题**：战报区与对局明细各有一套日期状态（`#daily-date` 输入框 vs `matchDay`），改一处另一处不同步，用户得在两个地方分别选同一天。
+
+**改法**：日期状态统一为顶层 `matchDay`。`d-today`／`d-yesterday`／`d-all`／`d-date` 都经 `setDay()` 写 `matchDay`，再一起刷新 `loadDaily()` 与 `loadMatches()`；战报不再从输入框读日期。
+
+选「全部日期」（`matchDay === ""`）时**藏起战报区**并显示替代说明——战报是单日口径，全部日期下没有意义；下方明细仍列出全部记录。
+
+主将档案新增排序开关：`sort=count`（按场次，默认）／`sort=recent`（按最近相遇，打标时不用翻页找）。`last_time` 取 `MAX(m.start_time)`，`NULL` 排在最后。
+
+**踩过的坑**：`api_commanders` 一度把带 `sort` 的同一个 kwargs 词典同时传给 `stats.matchups` 与 `stats.commander_coverage`，后者没有该参数 → `TypeError` → **整个 `/api/commanders` 500**，对手主将档案页全白。`sort` 只属于 rows。回归测试见 `tests/test_matchups.py::test_commanders_api_accepts_both_sorts`。
+
+**测试**：`tests/test_daily_ui.cjs` 用 `vm` 跑 `loadDaily` 片段，断言旧响应与作用域不匹配的响应都被丢弃、赛事名与历史条正确渲染，以及「全部日期不再请求 `/api/daily`」。注意 `matchDay` 与 `syncMatchDayBtns` 定义在切片之外，测试需显式注入。
+
+
+

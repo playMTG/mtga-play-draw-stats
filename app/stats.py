@@ -319,21 +319,66 @@ ARCH_ZH = {
 }
 
 
-def load_priors(root) -> dict[str, str]:
-    """主将→类型先验（commander_archetypes.json，可编辑）。"""
+def parse_tags(value) -> list[str]:
+    """把各种形态的类型值统一成规范标签列表（保序去重）。
+
+    接受：None / "" / "Ramp" / "Ramp,Combo" / ["Combo", "Ramp"]。
+    非法标签（不在 ARCH_KEYS 内）被丢弃——先验表是用户可编辑的，
+    写错一个词不该让整张表失效。
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        parts = list(value)
+    else:
+        return []
+    out: list[str] = []
+    for raw in parts:
+        key = str(raw).strip()
+        if key in ARCH_KEYS and key not in out:
+            out.append(key)
+    return out
+
+
+def join_tags(value) -> str:
+    """把各种形态的类型值拼成存储串；空值返回空串。
+
+    存储用逗号分隔（"Ramp,Combo"），单标签时就是它自己——旧数据无需迁移。
+    """
+    return ",".join(parse_tags(value))
+
+
+def load_priors(root) -> dict[str, list[str]]:
+    """主将→类型先验（commander_archetypes.json，可编辑）。
+
+    值支持单值字符串（旧格式）或多值数组：{"X": "Ramp"} / {"X": ["Ramp", "Combo"]}。
+    """
     import json
     p = Path(root) / "commander_archetypes.json"
     if not p.exists():
         return {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        return {k: v for k, v in data.items() if not k.startswith("_") and v in ARCH_KEYS}
     except (json.JSONDecodeError, OSError):
         return {}
+    out: dict[str, list[str]] = {}
+    for k, v in data.items():
+        if k.startswith("_"):
+            continue
+        tags = parse_tags(v)
+        if tags:
+            out[k] = tags
+    return out
 
 
-def archetype_map(conn: sqlite3.Connection, root) -> dict[str, str]:
-    """合并类型解析：手动打标（opponent_profiles）> 先验映射。键为主将卡名。"""
+def archetype_map(conn: sqlite3.Connection, root) -> dict[str, list[str]]:
+    """合并类型解析：手动打标（opponent_profiles）> 先验映射。键为主将卡名。
+
+    手动打标整体**覆盖**先验（用户说了算），但覆盖的是标签集合，不是单值——
+    在 UI 上给某主将再加一个轴，会替换掉先验里的全部标签。
+    """
     out = dict(load_priors(root))
     # 手动打标沉淀（user 优先，其次 auto 快照）
     try:
@@ -341,8 +386,9 @@ def archetype_map(conn: sqlite3.Connection, root) -> dict[str, str]:
             "SELECT commander_name, COALESCE(archetype_user, archetype_auto) a "
             "FROM opponent_profiles WHERE a IS NOT NULL"
         ):
-            if r["a"]:
-                out[r["commander_name"]] = r["a"]
+            tags = parse_tags(r["a"])
+            if tags:
+                out[r["commander_name"]] = tags
     except sqlite3.OperationalError:
         pass  # 表尚未创建（旧库）时静默降级
     return out
@@ -351,11 +397,15 @@ def archetype_map(conn: sqlite3.Connection, root) -> dict[str, str]:
 def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
              event: str | None = None, deck: str | None = None,
              root=None, lang: str = "zh", exclude_bot: bool = True,
-             family: str | None = None, mode: str | None = None) -> list[dict]:
+             family: str | None = None, mode: str | None = None,
+             sort: str = "count") -> list[dict]:
     """对手主将档案：总/先手/后手胜率 + 卡名 + 类型标签。
 
     依赖 store.connect 已 ATTACH 卡名库为 cards_db（缺失时卡名降级为 grpId）。
     lang="zh" 时优先使用中文卡名（name_zh，缺失回落英文）。
+
+    sort="count"（默认）按对局数降序；sort="recent" 按最近相遇时间降序——
+    打标时更有用：最近碰到的对手通常就在列表前面，不用翻页找。
     """
     conds = ["m.my_result IS NOT NULL"]
     args: list = []
@@ -397,11 +447,15 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         name_expr = "'grpId:' || c.grp_id"
     join_sql = ("LEFT JOIN cards_db.cards cards ON cards.grp_id = c.grp_id"
                 if has_cards else "")
+    # 最近相遇时间：start_time 可能为 NULL（早期记录），MAX 会忽略它们
+    order_sql = ("last_ms DESC NULLS LAST, n DESC" if sort == "recent"
+                 else "n DESC, last_ms DESC NULLS LAST")
     rows = conn.execute(
         f"""SELECT c.grp_id k,
                {('cards.name' if has_cards else 'NULL')} canonical_name,
                {name_expr} name,
                SUM(m.my_result='win') w, COUNT(DISTINCT m.match_id) n,
+               MAX(m.start_time) last_ms,
                SUM(CASE WHEN m.play_draw='play' THEN 1 ELSE 0 END) pn,
                SUM(CASE WHEN m.play_draw='play' AND m.my_result='win' THEN 1 ELSE 0 END) pw,
                SUM(CASE WHEN m.play_draw='draw' THEN 1 ELSE 0 END) dn,
@@ -410,7 +464,7 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
             JOIN commanders c ON c.match_id = m.match_id AND c.seat != m.my_seat
             {join_sql}
             WHERE {where}
-            GROUP BY c.grp_id ORDER BY n DESC""",
+            GROUP BY c.grp_id ORDER BY {order_sql}""",
         args,
     ).fetchall()
     arch = archetype_map(conn, root) if root else {}
@@ -419,7 +473,12 @@ def matchups(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         {
             "key": r["k"],
             **names.get(r["k"]),
-            "archetype": arch.get(r["canonical_name"]) or arch.get('grpId:' + str(r['k'])) or arch.get(r["name"]),
+            # 类型是标签集合：同一主将可有多个玩法轴（如始霸埃泰力 = Ramp + Combo）。
+            # 按类型聚合战绩时对每个标签各计一次（重叠口径，见 docs/DESIGN.md）。
+            "archetype": arch.get(r["canonical_name"])
+                           or arch.get('grpId:' + str(r['k']))
+                           or arch.get(r["name"]) or [],
+            "last_time": r["last_ms"],
             **wr(r["w"] or 0, r["n"]),
             "on_play": wr(r["pw"] or 0, r["pn"]),
             "on_draw": wr(r["dw"] or 0, r["dn"]),

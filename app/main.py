@@ -495,11 +495,15 @@ def api_mulligans(exclude_abnormal: bool = True, exclude_bot: bool = True,
 def api_commanders(exclude_abnormal: bool = True, exclude_bot: bool = True,
                    event: str | None = None, deck: str | None = None,
                    family: str | None = None,
-                   mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
+                   mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$"),
+                   sort: str = Query("count", pattern="^(count|recent)$")):
+    """对手主将档案。sort=count 按场次（默认）；sort=recent 按最近相遇时间。"""
     kw = dict(exclude_abnormal=exclude_abnormal, event=event, deck=deck,
               family=family, mode=mode)
+    # sort 只属于 rows：commander_coverage 是样本覆盖率，没有排序概念。
+    # 早前把 sort 一起塞进 kw 传给两边，coverage 收到未知参数直接 500（R13.3）
     rows = q(stats.matchups, root=cfg.root, lang=cfg.get("card_name_lang", "zh"),
-             exclude_bot=exclude_bot, **kw)
+             exclude_bot=exclude_bot, sort=sort, **kw)
     coverage = q(stats.commander_coverage, exclude_bot=exclude_bot, **kw)
     return {"rows": rows, "coverage": coverage}
 
@@ -663,8 +667,19 @@ def api_retry_boot():
 
 @app.post("/api/opp_tag_by_name")
 def api_opp_tag_by_name(commander: str = Query(...), tag: str = Query("")):
-    """按主将名打标（主将档案表入口）。tag 为空 = 清除，恢复先验/无标签。"""
+    """按主将名打标（主将档案表入口）。
+
+    tag 支持**多标签**（逗号分隔，如 "Ramp,Combo"）——争锋卡组常有多种玩法轴
+    （如始霸埃泰力既是 Ramp 也是组合技）。空串 = 清除，恢复先验。
+    传进来的集合整体替换该主将的标签，不是增量追加。
+    """
     def _set(conn):
+        # 严格校验：非法标签要报错，不能静默丢弃（parse_tags 会过滤，故此处在前面拦）
+        parts = [p.strip() for p in (tag or "").split(",") if p.strip()]
+        bad = [p for p in parts if p not in stats.ARCH_KEYS]
+        if bad:
+            return {"ok": False, "error": f"非法类型：{'、'.join(bad)}"}
+        raw = ",".join(dict.fromkeys(parts))  # 保序去重
         if commander.startswith("grpId:"):
             # 未知卡名，按 grpId 回填
             gid = commander.removeprefix("grpId:")
@@ -679,8 +694,6 @@ def api_opp_tag_by_name(commander: str = Query(...), tag: str = Query("")):
             # 不用裸查 cards_db，避免 "no such table"（R12.5）。
             where_sql = "0"
             args = ()
-        if tag and tag not in stats.ARCH_KEYS:
-            return {"ok": False, "error": f"非法类型：{tag}"}
         profile_key = commander
         if commander.startswith("grpId:"):
             try:
@@ -695,7 +708,7 @@ def api_opp_tag_by_name(commander: str = Query(...), tag: str = Query("")):
                ON CONFLICT(commander_name) DO UPDATE SET
                  archetype_user=excluded.archetype_user,
                  updated_at=excluded.updated_at""",
-            (profile_key, tag or None),
+            (profile_key, raw or None),
         )
         try:
             conn.execute(
@@ -704,12 +717,12 @@ def api_opp_tag_by_name(commander: str = Query(...), tag: str = Query("")):
                      SELECT c.match_id FROM commanders c
                      WHERE c.seat != (SELECT my_seat FROM matches m WHERE m.match_id = c.match_id)
                        AND {where_sql})""",
-                (tag or None, *args),
+                (raw or None, *args),
             )
         except sqlite3.OperationalError:
             pass  # 卡名库未挂载时跳过回填
         conn.commit()
-        return {"ok": True, "commander": commander, "tag": tag or None}
+        return {"ok": True, "commander": commander, "tags": parts, "tag": raw or None}
     return q(_set)
 
 

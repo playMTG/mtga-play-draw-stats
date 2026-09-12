@@ -119,7 +119,12 @@ R10 已分成：BO 模式统一筛选与逐局入口、构筑对手类型的手�
 ## 交接记录
 
 - 当前进度：R1—R10.3、R11.1—R11.6、R12.1—R12.5、R13.1—R13.4 全部完成。下一版方向从 [VISION.md](VISION.md) 重新排优先级，不在本路线图中自动追加编号。
-- R13 提交：`b09adcb`（修 `/api/commanders` 把 `sort` 传给 `commander_coverage` 导致的接口 500）与 `cbecbf1`（R13.1—R13.3 主体）。两个提交都用 `git worktree add --detach` 单独检出跑过全量测试（212／218 passed），确认不是坏提交。R13.4 另提交。
+- R13 提交：`b09adcb`（修 `/api/commanders` 把 `sort` 传给 `commander_coverage` 导致的接口 500）与 `cbecbf1`（R13.1—R13.3 主体）。两个提交都用 `git worktree add --detach` 单独检出跑过全量测试（212／218 passed），确认不是坏提交。
+- R13 后续提交（都在 R13 完成之后收的尾，不属于新的路线图编号）：
+  - `72a54b0` — R13.4 区块加载独立容错（见下条）。
+  - `b6f3b95` — 日报评语不再补「这一天已记录 N 场，X 胜 Y 负」这句复读。真实库实测：890 个有记录的日子中 135 天（约 15%）属「有对局但无亮点」，现在 `plain` 留空串，前端隐藏该段落；744 天有亮点、行为不变；无对局仍给提示句。**注意这个改动的「前端半边」在 `cbecbf1` 里**（`web/app.js` 的 `$("daily-plain").hidden = !r.plain`），本提交把后端补齐。
+  - `c5fa4f5` — 为上面那条新契约补单元层与接口层各一条测试（`test_daily_highlights.py::test_no_strong_signal_returns_empty`、`test_insights.py::test_daily_plain_empty_when_no_highlight`）。
+- 每个提交都单独检出跑过全量测试（`72a54b0` → 219、`b6f3b95` → 220、`c5fa4f5` → 222；219 与 220 的差值是当时尚未提交的 `tests/test_ui_ids.py`）。**本地共 5 个提交尚未推送**——`origin/main` 的 upstream 已 gone，推送前先确认远端分支现状。
 - R13.4 实际验收：`reload()` 由 `Promise.all` 改为 `Promise.allSettled`，失败区块汇总到 `#load-error` 并逐个点名，其余照常渲染；筛选条件取不到时标题改为「页面未能初始化」（那种情况下 `reload` 根本不会开始）。测试 `tests/test_load_error_ui.cjs` 断言「一个区块失败不阻止其余八个加载」「未失败的区块不被点名」「恢复后错误区自动收起」，已用「临时退回 `Promise.all` → 断言失败 → 还原」验证过能捕获。浏览器实测：正常加载时 `#load-error` 保持隐藏，模拟单区块失败显示「部分区块加载失败／每日战报：…／其余区块已正常加载」，模拟致命失败显示「页面未能初始化／筛选条件：…」。
 - R13 空日期跳转（`DESIGN.md` 既有的「空日期可跳至当前筛选下最近有记录的一天」）浏览器实测通过：当天（2026-09-12）无对局时「查看最近有记录的一天」按钮出现，点击后 `matchDay` 与日期输入框都变为 2026-09-11、战报显示「3 连后手，不太顺。」、明细同步为「共 7 场」。**首屏默认日期保持「今天」不动**——这是文档既定口径（当天为空时给跳转入口），不是缺陷；实测最近 30 天里只有 1 天没有对局，为空是少数情形。
 - R13.3 实际验收：真实库上 `/api/commanders?sort=count` 与 `sort=recent` 均 200 且换序（`count` 首位 150 场的「拿卡地贱民阿耶尼」，`recent` 首位 2026-09-11 21:03 遇到的「织谜谕使波克」）；`sort` 非法值 422；12 个 API 端点全量冒烟 200。**实施中发现并修掉一个 500**：`api_commanders` 把带 `sort` 的同一个 kwargs 词典同时传给 `matchups` 与 `commander_coverage`，后者没有该参数，整个接口抛 `TypeError`、对手主将档案页全白。修法是把 `sort` 只留给 `matchups`；回归测试 `tests/test_matchups.py::test_commanders_api_accepts_both_sorts` 已用「临时回退修复 → 断言失败 → 还原」验证过能捕获。

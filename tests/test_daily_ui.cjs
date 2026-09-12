@@ -24,6 +24,24 @@ summary:{n:1,wins:1,losses:0,play:1,draw:0,unknown_pd:0,win_rate:{wr:100,n:1},pl
  assert.equal($('daily-history-section').hidden,false);
  assert.match($('daily-history-lead').innerHTML,/高 12 个百分点/);
  assert.match($('daily-history-items').innerHTML,/当天 1 场/);
+ // 空日（默认落在「今天」，当天常还没打牌）：三张只会显示「–%」「0 场」的统计卡
+ // 与「当天最长 0 场」都是零信息，应藏起来；跨日累计的「截至所选日期」必须保留。
+ const blank = response('这一天在当前筛选下没有已记录对局。');
+ blank.summary = {...blank.summary, n:0, wins:0, losses:0, play:0, draw:0,
+   win_rate:{wr:null,n:0}, play_rate:{wr:null,n:0}, top_commanders:[]};
+ blank.play_draw = {day:{play_rate:null,draw_rate:null}, day_streaks:{longest_play:0,longest_draw:0},
+   history_streaks:{current_side:'play',current_n:1,last_time:1789131805076,longest_play:16,longest_draw:11,reason:null}};
+ blank.events=[]; blank.history_summary={headline:'',note:'',items:[]};
+ context.matchDay='2026-01-02';
+ const blankRun=context.loadDaily(); pending[pending.length-1](blank); await blankRun;
+ assert.equal($('daily-summary').hidden,true,'空日应藏起三张「–%」统计卡');
+ assert.doesNotMatch($('daily-pd-streaks').innerHTML,/当天最长/,'空日不该显示「当天最长 0 场」');
+ assert.match($('daily-pd-streaks').innerHTML,/截至所选日期的当前连续/,'空日仍应保留跨日连续纪录');
+ // 回到有对局的日期，统计卡必须重新出现（隐藏状态不能残留）
+ const back=response('有对局'); back.play_draw=blank.play_draw;
+ const backRun=context.loadDaily(); pending[pending.length-1](back); await backRun;
+ assert.equal($('daily-summary').hidden,false,'有对局的日期统计卡应重新出现');
+ assert.match($('daily-pd-streaks').innerHTML,/当天最长/,'有对局的日期应显示「当天最长」');
  // R13：选「全部日期」时战报是单日口径、没有意义——藏起战报区且不再发请求
  const sent=pending.length;
  context.matchDay='';

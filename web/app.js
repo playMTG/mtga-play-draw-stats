@@ -860,14 +860,19 @@ async function loadDaily() {
   const dailyLevel = r.highlights?.[0]?.level;
   $("daily-plain").className = dailyLevel ? `daily-highlight ${dailyLevel}` : "";
   const pd = r.play_draw;
+  // 所选日期没有对局时，这三张卡只会显示「–%」「0 胜 0 负 · 0 场有胜负」——零信息，
+  // 首屏（默认落在「今天」，而当天常还没打牌）会被这一片「–」占满。直接藏起来，
+  // 让「查看最近有记录的一天」成为空日唯一显眼的动作。
+  $("daily-summary").hidden = !s.n;
   $("daily-summary").innerHTML = `<div class="card"><h2>当天胜率</h2><div class="big">${s.win_rate.wr ?? "–"}%</div><div class="ci">${s.wins} 胜 ${s.losses} 负 · ${s.win_rate.n} 场有胜负</div></div>
     <div class="card"><h2>当天先手率</h2><div class="big">${pd?.day.play_rate ?? "–"}%</div><div class="ci">先手 ${s.play} 场 · 后手 ${s.draw} 场</div></div>
     <div class="card"><h2>当天后手率</h2><div class="big">${pd?.day.draw_rate ?? "–"}%</div><div class="ci">${s.play_rate.n} 场先后手已知 · 未知 ${s.unknown_pd} 场</div></div>`;
   if (pd) {
     const d = pd.day_streaks, h = pd.history_streaks;
     const current = h.current_side ? `连续${h.current_side === "play" ? "先手" : "后手"} ${h.current_n} 场` : (h.reason || "无记录");
-    $("daily-pd-streaks").innerHTML = `<p><strong>当天最长</strong>：连续先手 ${d.longest_play ?? "–"} 场 · 连续后手 ${d.longest_draw ?? "–"} 场</p>
-      <p><strong>截至所选日期的当前连续</strong>：${esc(current)}${h.last_time ? ` · 末场 ${fmtTime(h.last_time)}` : ""}</p>
+    // 「当天最长」在空日同样只会是 0/0；「截至所选日期」那两行跨日累计，空日仍有意义，保留。
+    $("daily-pd-streaks").innerHTML = (s.n ? `<p><strong>当天最长</strong>：连续先手 ${d.longest_play ?? "–"} 场 · 连续后手 ${d.longest_draw ?? "–"} 场</p>` : "")
+      + `<p><strong>截至所选日期的当前连续</strong>：${esc(current)}${h.last_time ? ` · 末场 ${fmtTime(h.last_time)}` : ""}</p>
       <p class="ci">截至所选日期的历史最长：先手 ${h.longest_play ?? "–"} 场 · 后手 ${h.longest_draw ?? "–"} 场。当前筛选内、按比赛首局统计；未知先后手或同时间记录打断连续段。${h.reason && h.longest_play == null ? esc(h.reason)+"。" : ""}</p>`;
   }
   $("daily-events").innerHTML = r.events.map(e => `<p><strong>${eventMarkup(e.event, e.label)}</strong> · ${e.n} 场 · ${e.wins} 胜 ${e.losses} 负 · 先手 ${e.play} / 后手 ${e.draw} / 未知 ${e.unknown_pd}</p>`).join("")

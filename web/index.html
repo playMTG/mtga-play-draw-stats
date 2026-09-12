@@ -3,6 +3,9 @@
 <head data-page-node-id="D69WtGuJ9LSwAR9f5g8zCz">
 <meta charset="utf-8" data-page-node-id="B5nRXsApTBDUVgw7jrsLzL">
 <meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="QumXAQq0S2dwOAW9aDflb8">
+<!-- 内联 SVG 图标：⇅ 表示「先后手」。用 data: URI 是为了不发第二个请求，
+     也避免浏览器自动去要 /favicon.ico 而在控制台留一条 404。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230969da'/%3E%3Cg fill='none' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M12 24V9' stroke='%23ffffff'/%3E%3Cpath d='M7.5 13.5 12 9l4.5 4.5' stroke='%23ffffff'/%3E%3Cpath d='M20 8v15' stroke='%23bfe0ff'/%3E%3Cpath d='M15.5 18.5 20 23l4.5-4.5' stroke='%23bfe0ff'/%3E%3C/g%3E%3C/svg%3E">
 <title>MTGA 对局战报</title>
 <style>
 :root{
@@ -10,6 +13,10 @@
   --accent:#0969da; --win:#c94a3d; --loss:#1a7f5a; --warn:#b08800; --chip:#eef1f5;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+/* 浏览器默认的 [hidden]{display:none} 会被作者样式里的 display:grid/flex 盖掉
+   （.grid、.bar 这类类选择器优先级更高）。凡是用 el.hidden 切换显隐的元素，
+   都必须靠这条兜底才真的藏得住——否则 DOM 里 hidden=true、画面上照样显示。 */
+[hidden]{display:none!important}
 body{font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);padding:20px;max-width:1200px;margin:0 auto}
 h1{font-size:20px;margin-bottom:4px}
 h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600}
@@ -300,6 +307,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=0.4.0-cardnames"></script>
+<script src="app.js?v=0.4.1-daily-empty"></script>
 </body>
 </html>

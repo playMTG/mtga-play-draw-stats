@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parent.parent
 _ID_RE = re.compile(r'(?<![-\w])id="([^"]+)"')
 # 只取简单 id 形态的引用；带空格的（如 $(" #t-m tbody")）是选择器，不是 id
 _REF_RE = re.compile(r'\$\("([^"\s]+)"\)')
+# 兜底规则：[hidden]{display:none...}（允许 !important 与任意空白）
+_HIDDEN_RULE_RE = re.compile(r"\[hidden\]\s*\{[^}]*display\s*:\s*none", re.IGNORECASE)
 
 
 def test_app_js_ids_exist_in_html():
@@ -30,4 +32,23 @@ def test_app_js_ids_exist_in_html():
     assert not missing, (
         "app.js 引用了 index.html 中不存在的 id（取到 null 会在运行时报错）：\n  "
         + "\n  ".join(missing)
+    )
+
+
+def test_hidden_attribute_rule_beats_display_classes():
+    """`el.hidden = true` 必须真的藏得住元素。
+
+    浏览器默认的 `[hidden]{display:none}` 来自 UA 样式表，作者样式里任何
+    `display:grid` / `display:flex` 都会盖掉它——结果是 DOM 里 `hidden=true`、
+    画面上照样显示（单元测试用的是假 DOM、没有 CSS，所以照不出来）。
+    `app.js` 用 `.hidden` 切换显隐，因此页面必须自带一条兜底规则。
+    `#daily-summary` 是 `.grid g3`，正是踩了这个坑才补的这条。
+    """
+    html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    # 先剥掉 CSS 注释：上面那条说明里就写着 `[hidden]{display:none}` 这个示例，
+    # 不剥的话光靠注释就能让断言通过（空转验证时实测过）。
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.DOTALL)
+    assert _HIDDEN_RULE_RE.search(css), (
+        "index.html 缺少 `[hidden]{display:none}` 兜底规则："
+        "带 display:grid/flex 的元素用 el.hidden 将无法隐藏"
     )

@@ -26,6 +26,10 @@
 
 本地和 Untapped 构筑统一到 titleId 身份空间，按各区数量生成 title-v1 指纹。未知卡牌映射保留 local 前缀，不能跨来源强行合并。未知版本也不能当作一致版本。
 
+空日期（首屏默认落在「今天」，而当天往往还没打牌）只保留「没有已记录对局」的说明、跳转入口和跨日累计的连续纪录。当天胜率／先手率／后手率三张卡与「当天最长」在空日恒为 `–%`、`0 场`，是零信息，直接隐藏；口径仍默认「今天」不变（见 R1）。跳转入口只在所选日期确无对局时出现。
+
+前端约定：浏览器默认的 `[hidden]{display:none}` 来自 UA 样式表，作者样式里任何 `display:grid`／`display:flex` 都会盖掉它——结果是 DOM 里 `hidden=true`、画面上照样显示，而前端单元测试用的是假 DOM、没有 CSS，照不出来。`web/index.html` 因此自带一条 `[hidden]{display:none!important}` 兜底，凡是用 `el.hidden` 切换显隐的元素都依赖它。`tests/test_ui_ids.py::test_hidden_attribute_rule_beats_display_classes` 守住这条规则（匹配前先剥掉 CSS 注释，否则说明文字里的示例写法就能骗过断言）。
+
 ## Untapped 补全
 
 旧 JSONL 扁平记录丢掉了原始主将与起手信息。`app/deckstrings.py` 解析原始 deckstring 的主将元数据，并区分伙伴与主将。其 titleId 必须借助公开卡表转换为 Arena grpId，不能直接当作 grpId；双面卡归到主要牌面。

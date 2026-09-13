@@ -100,6 +100,28 @@ API 返回评语类别、相关场数、范围分母、对应对局 ID 及只读
 
 追加核验：[暮悲邸：鬼屋惊魂](https://magic.wizards.com/zh-Hans/products/duskmourn-house-of-horror)、[新卡佩纳：喧嚣黑街](https://magic.wizards.com/zh-Hans/news/feature/streets-of-new-capenna-mechanics)、[兄弟之战](https://magic.wizards.com/zh-Hans/products/the-brothers-war)、[非瑞克西亚：万界归一](https://magic.wizards.com/zh-Hans/products/phyrexia-all-will-be-one)、[斯翠海文](https://magic.wizards.com/zh-Hans/products/strixhaven)、[依夏兰迷窟](https://magic.wizards.com/zh-Hans/products/the-lost-caverns-of-ixalan)、[卡洛夫庄园谋杀案](https://magic.wizards.com/zh-Hans/products/murders-at-karlov-manor)。繁体来源按简体显示。PickTwoDraft 使用“选两张轮抽”，纠正原来的“二选一轮抽”。未核验系列保留代码。
 
+### 2026-09-13 核验：赛事类型译名四项 + 系列名补齐
+
+**四项赛事类型译名**的代码改动早已落地（`EXACT` 的 `Play_Brawl_Historic`＝史迹争锋、`Play_Brawl`＝标准争锋；`PREFIXES` 的 `MWM_`＝周中、`Yargle_Day_`＝雅骨尔日；`TERMS` 的 `Momir`＝莫秘维），本轮补齐的是**来源**，确认不是凭口述定的：
+
+- **史迹争锋／标准争锋**：官方赛制页作[「争锋赛」](https://magic.wizards.com/zh-Hans/formats)（Brawl）。这两个模式本身没有排位，去掉「（非排位）」是对的。同页的「纯普赛」也印证了既有的「史迹纯普」写法。
+- **周中**：客户端本地化库（`Raw_ClientLocalization_*.mtga` 的 `Events/Event_Cat_MWM_*`）里官方英文事件名是 `Midweek Magic`；社区中文站[十七地](https://shiqidi.lenitatis.com/calendar)作「周中万智牌」——「周中」是它的简称。
+- **莫秘维**：Paratranz 译名库 stage=9（官方级）作「莫秘维」（`DIS·110 Experiment Kraj` 等多处风味文字署名）；十七地的赛事名同作「莫秘维」。原「莫米」是不完整译名。**注**：官方赛制页把 Momir Basic 写作「莫秘基本地」，短了一截；赛事与卡牌一律用「莫秘维」，本插件跟随后者。
+- **雅骨尔日**：Paratranz stage=9 作「雅骨尔」（`2X2·384 Muldrotha` 风味文字）；真卡 `PSSC·4 Happy Yargle Day!` 译「雅骨尔日快乐！」；客户端 `Achievements/UI/YargleDayAchievementsHeader` 英文为 `Yargle Day`；十七地赛事名同作「雅骨尔日」。
+
+**系列名补齐**：核验中发现「未核验系列保留代码」这条口径让一批**官方中文站已给过中文名**的系列还显示代码，一并补入 `SETS` 六个（来源均为官方中文站，繁体来源按简体显示）：
+
+| 代码 | 英文 | 中文 | 来源 |
+|---|---|---|---|
+| HOB | The Hobbit | 霍比特人 | [孩之宝中国 WPN 产品页](https://www.cnwizards.com/products)（2026.08） |
+| SOS | Secrets of Strixhaven | 斯翠海文的秘密 | 同上（官方产品卡作「斯翠海文的祕密」，简体归「秘」） |
+| TMT | Teenage Mutant Ninja Turtles | 忍者神龟 | 同上（2026.03.06） |
+| TLA | Avatar: The Last Airbender | 降世神通：最后的气宗 | 同上 + [官方导航](https://magic.wizards.com/zh-Hans/products) |
+| FIN | Final Fantasy | 最终幻想 | [官方产品页](https://magic.wizards.com/zh-Hans/products/final-fantasy)（标题用 IP 原名，正文与产品系列名一律《最终幻想》） |
+| HBG | Alchemy Horizons: Baldur's Gate | 炼金新篇：博德之门 | MTGA 官方公告译文（2022-07-14，旅法师营地／头条同文） |
+
+**仍保留代码的六个**（ECL 94 场、EOE 52、FDN 36、YECL 7、SIR 4、DBL 4）：官方中文站对这些系列**只给英文名**——`Lorwyn Eclipsed`、`Edge of Eternities`、`Foundations` 在官方产品页与「最新产品」列表里都是英文（实测 `…/products/edge-of-eternities` 全篇用英文系列名）。社区译名互相冲突（Lorwyn Eclipsed 有「洛温：蚀」「洛温：日蚀」两说，Edge of Eternities 有「虚空边域」「永恒边缘」两说，Foundations 有「基石构筑」「初创」两说），按「不凭口述直接改」的口径保留代码，等官方给出中文名再补。守卫 `tests/test_event_names.py::test_unverified_sets_keep_their_codes` 钉住这条。
+
 ## R4 主将与卡牌中文化
 
 `app/card_names.py` 是显示名称与元数据的共用入口。主将档案、日报与证据、近期观察、明细和 CSV 使用该映射。返回中文、英文、grpId 和译名来源；页面主将名称可展开，其他位置悬停回查。

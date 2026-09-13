@@ -7,6 +7,9 @@ from pathlib import Path
 OVERRIDES_PATH = Path(__file__).resolve().parent.parent / 'data' / 'event_names.zh.json'
 
 # Project descriptive translations; set names with verified sources are documented.
+# 只收「官方中文站确实给过中文名」的系列（见 DESIGN.md「R3 赛事中文化」的核验来源）。
+# 官方对 2025 年后的部分系列仍只用英文名（Lorwyn Eclipsed / Edge of Eternities /
+# Foundations 的官方中文页标题就是英文），这类按既定口径保留代码，不自行音译。
 SETS = {
     'DMU': '多明纳里亚：众志成城', 'MOM': '邪军压境',
     'MID': '依尼翠：黯夜猎踪', 'VOW': '依尼翠：腥红婚誓',
@@ -15,6 +18,9 @@ SETS = {
     'DSK': '暮悲邸：鬼屋惊魂', 'SNC': '新卡佩纳：喧嚣黑街',
     'BRO': '兄弟之战', 'ONE': '非瑞克西亚：万界归一',
     'STX': '斯翠海文', 'LCI': '依夏兰迷窟', 'MKM': '卡洛夫庄园谋杀案',
+    'HOB': '霍比特人', 'SOS': '斯翠海文的秘密',
+    'TMT': '忍者神龟', 'TLA': '降世神通：最后的气宗',
+    'FIN': '最终幻想', 'HBG': '炼金新篇：博德之门',
 }
 EXACT = {
     'Ladder': '标准排位', 'Traditional_Ladder': '传统标准排位',

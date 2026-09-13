@@ -144,6 +144,12 @@ R10 已分成：BO 模式统一筛选与逐局入口、构筑对手类型的手�
   - 三处都按项目惯例做了空转验证：A 临时改成 `length > 0` → `.cjs` 断言失败；B 临时去掉连续分支 → `KeyError: 'streak'`；C 临时加回「主将类型来源」→ 守卫失败。全部已还原。
   - 验收：`pytest tests/ -q` 全绿；`node --check web/app.js` 通过；`tools/check_privacy.py --all` 通过。`app.js` 有改动，缓存失效参数随之 `0.4.2-deck-cascade` → `0.4.3-quiet-ui`。
   - 口径、取舍与测试见 `DESIGN.md` 的「收尾 2026-09-12 界面减负」。
+- 赛事译名核验（VISION 剩余项，不占新编号）：
+  - **四项赛事类型译名**（史迹争锋／标准争锋／周中／莫秘维／雅骨尔日）的代码改动**早已在 `app/event_names.py` 里落地**，本轮做的是核验与留档，**这四项没有改代码**。四项的独立来源全部对上：官方赛制页（「争锋赛」「纯普赛」）、客户端本地化库（`Raw_ClientLocalization_*.mtga` 的 `Events/Event_Cat_MWM_*` = `Midweek Magic`）、Paratranz 译名库 stage=9（「莫秘维」「雅骨尔」）、真卡 `PSSC·4 Happy Yargle Day!`（「雅骨尔日快乐！」）、社区中文站十七地（「周中万智牌」「争锋」「莫秘维」「雅骨尔日」）。**注**：官方赛制页把 Momir Basic 写作「莫秘基本地」，短一截；赛事与卡牌一律用「莫秘维」，跟随后者。
+  - **顺带补齐系列名**：核验中发现「未核验系列保留代码」这条口径让一批**官方已给过中文名**的系列还显示代码。全库扫描 254 个 `event_id`，补入 `SETS` 六个：HOB 霍比特人、SOS 斯翠海文的秘密、TMT 忍者神龟、TLA 降世神通：最后的气宗、FIN 最终幻想、HBG 炼金新篇：博德之门（来源均为官方中文站或 MTGA 官方公告译文）。完全中文化的 `event_id` 由 **187 → 199**（英文残留 67 → 55）。
+  - **仍保留代码的六个**：ECL（94 场）、EOE（52）、FDN（36）、YECL（7）、SIR（4）、DBL（4），合计 197 场。官方中文站对这些系列**只给英文名**（`Lorwyn Eclipsed`／`Edge of Eternities`／`Foundations` 的官方产品页标题就是英文），社区译名互相冲突（Lorwyn Eclipsed 有「洛温：蚀」「洛温：日蚀」，Edge of Eternities 有「虚空边域」「永恒边缘」，Foundations 有「基石构筑」「初创」），按「不凭口述直接改」保留代码。守卫 `test_event_names.py::test_unverified_sets_keep_their_codes` 钉住。另注：还有 `KTK`（鞑契可汗）这类只以 `XXConstructed` 形式出现的代码，扫描脚本不单独列出。
+  - **测试**：`tests/test_event_names.py` 新增 10 条（7 条系列名渲染 + 3 条「未核验保留代码」）。两条守卫都做了空转验证：临时把 `SOS` 还原成代码 → `assert '周中 · SOS · 现开…' == '周中 · 斯翠海文的秘密…'` 失败；临时把 `ECL` 塞进 `SETS` → 守卫报「系列代码被换掉了」。全部已还原，`grep TEMP-MUTATION` 无残留。
+  - 验收：`pytest tests/ -q` → **253 passed**（较 243 多 10 条）。口径、来源与取舍见 `DESIGN.md`「2026-09-13 核验」。
 - R13 提交：`b09adcb`（修 `/api/commanders` 把 `sort` 传给 `commander_coverage` 导致的接口 500）与 `cbecbf1`（R13.1—R13.3 主体）。两个提交都用 `git worktree add --detach` 单独检出跑过全量测试（212／218 passed），确认不是坏提交。
 - R13 后续提交（都在 R13 完成之后收的尾，不属于新的路线图编号）：
   - `72a54b0` — R13.4 区块加载独立容错（见下条）。

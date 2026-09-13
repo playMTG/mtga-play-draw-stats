@@ -14,10 +14,10 @@ const context = vm.createContext({
     ? (row.opp_archetype_tag || '未标') : (cards?.map(card => card.name).join(' / ') || '不适用'),
   encodeURIComponent, decodeURIComponent, JSON,
 });
-// 切片哨兵：起点 deckLink，终点用后面第一个无关函数。
+// 切片哨兵：起点 deckOpenButton（deckLink 现在复用它拼 payload），终点用后面第一个无关函数。
 // 必须断言哨兵都能找到——否则 indexOf 返回 -1 会让 slice 把整份源码喂给 vm，
 // 表现为「document is not defined」而在加载阶段静默崩掉（曾因此失效过）。
-const START = 'function deckLink';
+const START = 'function deckOpenButton';
 const END = 'function deckJourneyRender';
 const start = source.indexOf(START);
 const end = source.indexOf(END);

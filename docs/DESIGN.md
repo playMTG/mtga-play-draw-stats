@@ -512,3 +512,91 @@ WHERE COALESCE(my_deck_tag,'') = ? AND COALESCE(my_deck_id,'') = ?
 
 
 
+
+## V3 收尾 首页套牌入口与赛制自适应（2026-09-13）
+
+### 1. 背景：V3 的赛制自适应此前是死代码
+
+`applyFormatFocus()` 用 `const filtering = !!(params().toString())` 判断「用户有没有手动筛选」。但 `params()` **永远**会 `set("exclude_bot", …)`，所以 `toString()` 恒非空、`filtering` 恒为真，函数每次都在第一行 `return`。
+
+后果：提示条 `#format-focus-note` 永远隐藏、`document.body.dataset.formatFocus` 永远是空串、`#commander-card` / `#rank-card` / `#opponent-types-card` 的收放从来没被设过。VISION 里 V3 那节写「首页提示条 + 收放对手主将/段位/构筑类型区块」——**从 `4ccb511` 落地那天起就没生效过**，纯前端 `.cjs` 假 DOM 测试也照不出来（没有 `params` 依赖链，也没有 CSS）。
+
+**口径**：判的是「用户真的挑了筛选条件」，即四个筛选控件有没有值：
+
+```js
+const filtering = ["f-family", "f-event", "f-mode", "f-deck"].some(id => $(id)?.value);
+```
+
+`exclude_bot` 是「排除开关」，不是赛制筛选，不该参与这个判断。
+
+### 2. 首页缺 V1 主路径的入口
+
+V1 把套牌旅程（身份 → 版本 → 单次复盘）做完了，但首页没有任何入口：只能靠筛选下拉的「查看套牌详情」或明细表里的套牌名。后端 `overview` 的 `by_deck`（314 条）与 `by_event`（254 条）算了却从没渲染。
+
+新增 `#recent-decks-card`，位置在**每日战报之后、三张总览卡之前**——是「接着去哪」的跳板位，也是排位焦点时段位卡会被挪到的地方。
+
+### 3. 聚合粒度：按 `my_deck_id` 成行，不按名字
+
+这是本节最容易做错的地方。本机实测：
+
+| 口径 | 行数 |
+|---|---|
+| `(my_deck_tag, my_deck_id)` 组合 | 708 |
+| distinct `my_deck_id` | 687 |
+| 按 id/version 二部图求连通分量 | 677 |
+
+- **按名字聚合是错的**：「轮抽套牌」一个名字压着 188 次 draft，聚合后只剩一行 1288 场，入口直接废掉。
+- **按 `(tag, did)` 聚合会拆行**：本机 20 个 `did` 挂了多个 `tag`（如 `9ebde2d1` =「脂牙」+「脂牙 BO1」192 场）。拆出来的两行点进去是**同一个详情页**，正是入口最不该有的样子。
+- **按 `did` 聚合**与二级下拉（`deck_identities`）、`openDeck` 的 payload 是同一个单位，一行一个目的地。
+- **没有进一步按 `my_deck_version` 求连通分量**（那才是 `deck_detail._identity` 的完整语义）：要遍历全库建图，首页每次加载都跑太重。代价是本机 10 个「同版本号跨 id」的分量（3–230 场，多数是 `?`／`Imported Deck` 占位名）会占两行、点进去同一页；其余 677 个身份都是一行一个目的地。**这是一处已知取舍，不是遗漏。**
+
+只有名字、没有 `deck_id` 的记录仍按名字单独成行（它们点进去也是按名字找）。
+
+### 4. 显示名：派生名优先，其次最近一次的 tag，撞名才补时间
+
+```
+label = limited_labels[did]  ||  该 did 最近一次对局的 my_deck_tag
+```
+
+与详情页标题同规则（`deck_detail` 先取 `recent_name`、再被 `derived_label` 覆盖），所以**点进去不会「换个名字」**。
+
+**撞名时补「首次对局时间 起」**：本机「现开赛」×5、「?」×22、「已导入的套牌」×10、「黑白中速」×4 等，摆五行一模一样的名字等于没法挑。只有真的撞名才补，不撞就保持用户自己的名字（「阿耶尼史迹争锋」不加尾巴）。
+
+- 时间用**分钟**精度：`Yargle_Day_20260903` 那 5 副是同一天连着开的，只到日期会重名五次。
+- 补完时间还撞（同一分钟开的两副）再用 `deck_id[:6]` 兜底，保证行行可分。
+- 判定在**切片之前**做，所以「补不补」只取决于筛选、不取决于 `limit`。
+
+**为什么 `Yargle_Day_*` 拿不到派生名**：`deck_names._is_limited()` 只认 `event_id` 里含 `Draft`/`Sealed`，而 `Yargle_Day_20260903` 这个特别活动的 event_id 两者都不含 → `limited` 计数为 0 → 派生名规则认不出。**没有去放宽 `_is_limited`**：那 92 个不含 Draft/Sealed 的 event_id 里混着 `Ladder`、`Explorer_Event_v2`、`Play_Brawl_Historic`、`Constructed_Event_2022` 这类**根本不是限制赛**的赛事，放宽会大面积误伤。撞名补时间的做法对「占位名」与「用户自起的重名」一视同仁，不依赖赛事名。
+
+### 5. 赛制收窄（`focus`）
+
+`recent_decks(focus=True)`：**仅当调用方没显式给赛事／赛制／模式时**，按 `format_focus()` 算出的近 30 天主赛制收窄。响应里的 `focus` 字段回传实际口径（`applied`／`primary`／`label`／`window_days`／`share`），前端据此写提示条。主赛制为 `unknown`（近 30 天无数据）时不收窄——否则入口会空掉。
+
+首页两个按钮「主赛制 / 全部」对应 `focus=1 / 0`，默认「主赛制」。
+
+### 6. 刻意不收套牌筛选
+
+`recent_decks` 的签名里没有 `deck` / `deck_id`，API 层也不收。它是**选择器**，跟随套牌筛选就退化成一张永远只有一行的卡片。赛事／赛制／模式照常收窄。前端在套牌筛选生效时会写一句「套牌筛选不影响这个区块——它就是用来挑套牌的」，避免看起来像坏了。
+
+### 实现
+
+- `app/stats.py`：新增 `recent_decks()` 与 `_day_of()`；`_event_scope` 复用于赛事／赛制收窄。
+- `app/main.py`：新增 `GET /api/recent_decks`（`limit` 1–50，默认 12；`focus` 默认 false）。
+- `web/app.js`：抽出 `deckOpenButton()`（payload 形状只在一处拼，明细与入口区共用；`deckLink` 改为调用它）；新增 `loadRecentDecks()` / `recentDecksNote()` / `setRecentDecksScope()`；登记进 `RELOAD_SECTIONS`（10 项）；修 `applyFormatFocus` 的 `filtering`。
+- `web/index.html`：新增 `#recent-decks-card`（`#rd-focus` / `#rd-all` / `#recent-decks-note` / `#recent-decks-rows`）；缓存失效参数 `0.5.0-recent-decks`。
+
+### 测试
+
+- `tests/test_recent_decks.py` 15 条：一个 did 多 tag 并成一行、只有名字的行单独保留、限制赛 draft 各自成行且拿到派生名、撞名补时间、唯一名不加尾巴、同分钟再撞用 id 兜底、未记录套牌只计数不占行、排序与 limit、场次与先后手、异常／bot 开关、`focus` 四种情形、签名里不得出现 `deck`/`deck_id`。
+- `tests/test_recent_decks_ui.cjs`（已登记进 `CJS_TESTS`）：赛制自适应真的生效（提示条显示、`body.dataset.formatFocus`、三张卡收放、排位焦点把段位卡上移）、入口按钮 payload、口径提示条、空态。**上下文里故意注入了一个非空的 `params()`**——将来谁把 `filtering` 改回 `params().toString()`，这条会红在断言上，而不是悄悄退回死代码。
+- 同步：`test_deck_ui.cjs` / `test_deck_label_ui.cjs` 的切片起点改为 `function deckOpenButton`（`deckLink` 现在复用它的 payload）；`test_load_error_ui.cjs` 的 loader 清单从写死 9 改成显式列出 10 项。
+
+**空转验证**（三处，全部还原）：把 `filtering` 改回 `params().toString()` → cjs 报「没手动筛选时提示条必须显示」；把聚合键改回 `(tag, did)` → `assert 2 == 1`；去掉撞名补时间 → `assert '现开赛 · y1' == '现开赛 · 2026-09-04 19:19 起'`。
+
+**实测**（真实库 10,964 场，Chromium 快照 + playwright-core）：
+
+- 默认「主赛制」：提示条显示「近 30 天主赛制：争锋（约 70.5%）」，`body.dataset.formatFocus="争锋"`，`#rank-card` / `#opponent-types-card` 的 `getComputedStyle().display` 均为 `none`、高度 0（`[hidden]{display:none!important}` 兜底生效），`#commander-card` 保留。
+- 8 行，首行「拿杜史迹争锋生物版 277 场 · 胜率 57%（158 胜）· 先手 125 · 后手 141 · 最近一次 2026/09/12 23:11」；点第一行 → 详情弹窗标题「拿杜史迹争锋生物版」，与行内名字一致。
+- 切「全部」：`共 686 套牌`，`现开赛 · 2026-09-04 19:19/19:59/21:07/22:25/22:43 起` 五行各不相同；`另有 6 场没记录套牌`。
+- 手选赛制：提示条改为「已按当前筛选收窄，赛制切换以筛选为准。」，`format-focus-note` 隐藏、`dataset.formatFocus` 清空。
+- 卡片位置：`previousElementSibling` 是每日战报的 `section.card`，`nextElementSibling` 是总览 `grid g3`。控制台无错误。

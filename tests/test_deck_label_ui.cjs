@@ -3,10 +3,12 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('web/app.js', 'utf8');
 
-// 只取 deckLink 一段：matchRow 依赖太多渲染函数，这里只守「显示名取哪个字段」。
+// 只取 deckOpenButton + deckLink 一段：matchRow 依赖太多渲染函数，这里只守
+// 「显示名取哪个字段」与「payload 形状」。deckLink 复用 deckOpenButton 拼 payload，
+// 所以切片必须从 deckOpenButton 起，否则 vm 里找不到它。
 const context = vm.createContext({ esc: String });
 vm.runInContext(
-  source.slice(source.indexOf('function deckLink'), source.indexOf('function matchRow')),
+  source.slice(source.indexOf('function deckOpenButton'), source.indexOf('function matchRow')),
   context);
 
 // 1) 有 my_deck_label 时用它。这是本项的核心：客户端对限制赛牌组只给通用名

@@ -702,6 +702,150 @@ def deck_identities(conn: sqlite3.Connection, deck: str,
     return {"deck": deck, "items": items, "total": sum(i["n"] for i in items)}
 
 
+def _day_of(ms: int | None) -> str:
+    """epoch 毫秒 -> 本地「YYYY-MM-DD HH:MM」；缺时间时给一句可读的兜底。
+
+    用**分钟**精度而不是日期：同一场特别活动里连着开的几次 draft 是同一天，
+    只到日期的话「现开赛 · 2026-09-04 起」会重名五次，等于没分开。
+    """
+    if ms is None:
+        return "时间未记录"
+    return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
+
+
+def recent_decks(conn: sqlite3.Connection, limit: int = 12,
+                 exclude_abnormal: bool = True, exclude_bot: bool = True,
+                 event: str | None = None, family: str | None = None,
+                 mode: str | None = None, focus: bool = False) -> dict:
+    """首页「最近在打的套牌」入口（V3 收尾：让套牌旅程在首页可达）。
+
+    按 **deck 身份**（`my_deck_id`）聚合、按最近一次对局倒序。用身份而不是名字：
+    本机「轮抽套牌」一个名字压着 188 次 draft，按名字聚合只会得到一行 1288 场，
+    入口就废了；身份也正是「点进去」时交给 `deck_detail` 的键（`openDeck` 带的就是
+    `deck_id`），所以一行对应一个目的地。
+
+    **只按 `my_deck_id` 合并，不按 `my_deck_version` 求连通分量**：后者要遍历全库
+    建图（`deck_detail._identity` 的做法），首页每次加载都跑太重。代价是本机 10 个
+    「同版本号跨 id」的分量（3–230 场，多数是 `?`／`Imported Deck` 占位名）会占两行、
+    点进去却是同一页；其余 677 个身份都是一行一个目的地。
+
+    名字取「限制赛派生名（`limited_labels`）优先，否则**最近一次**的 `my_deck_tag`」
+    ——与详情页标题（`deck_detail` 的 `recent_name` → `derived_label`）同一口径，
+    点进去不会「换个名字」。若两行最终同名（本机「现开赛」×5、「黑白中速」×4 等
+    占位／重名），补一个「首次对局时间 起」把它们分开：入口的职责是让你挑得出来，
+    摆五行一模一样的名字等于没法挑。只有真的撞名才补，不撞就保持用户自己的名字。
+
+    `focus=True` 时，若调用方没有显式给赛事／赛制／模式，就按 `format_focus` 算出的
+    **近 30 天主赛制**收窄——这是 V3「信息密度随最近主赛制调整」落在入口区的那一半：
+    主赛制是轮抽时，入口先列最近那几场 draft，而不是把别的赛制也堆在最前面。返回体
+    里的 `focus` 说明这次到底收没收、收成了哪个赛制，前端据此写提示条；主赛制为
+    `unknown`（近 30 天没数据）时不收窄。
+
+    刻意**不接受套牌筛选**：这个区块是「选择器」，跟随套牌筛选会退化成一个永远只有
+    一行的卡片。赛事／赛制／模式仍照常收窄。
+
+    「套牌未记录」（tag 与 id 都为空）的对局不算套牌，单独计入 `unlabeled` 不占行
+    ——它们点不进去，摆在入口里只会占位。
+    """
+    focus_info = {"applied": False, "primary": None, "label": None,
+                  "window_days": None, "share": None}
+    if focus and not (event or family or mode):
+        ff = format_focus(conn)
+        focus_info.update(primary=ff.get("primary"), label=ff.get("label"),
+                          window_days=ff.get("window_days"), share=ff.get("share"))
+        if ff.get("primary") and ff["primary"] != "unknown":
+            family = ff["primary"]
+            focus_info["applied"] = True
+
+    conds, args = [], []
+    c, a = _event_scope(event, family, conn)
+    if c:
+        conds.append(c)
+        args.extend(a)
+    if mode:
+        conds.append("match_mode = ?")
+        args.append(mode)
+    if exclude_abnormal:
+        conds.append("is_abnormal = 0")
+    if exclude_bot:
+        conds.append("is_bot = 0")
+    where = " AND ".join([_BASE_WHERE] + conds)
+
+    # 先按 (tag, did) 取到「每个名字各自的场数／最近一次」——一个 did 可能挂多个名字
+    # （本机 20 个），这里要把它们并成一个身份。
+    rows = conn.execute(
+        f"""SELECT COALESCE(my_deck_tag, '') tag, COALESCE(my_deck_id, '') did,
+                   COUNT(*) n, SUM(my_result = 'win') w,
+                   MIN(start_time) first, MAX(start_time) last,
+                   SUM(play_draw = 'play') play, SUM(play_draw = 'draw') draw
+              FROM matches WHERE {where}
+             GROUP BY tag, did""",
+        args,
+    ).fetchall()
+
+    groups: dict[tuple[str, str], dict] = {}
+    unlabeled = 0
+    for r in rows:
+        if not r["tag"] and not r["did"]:
+            unlabeled += r["n"]
+            continue
+        # did 非空按 did 合并；只有名字（没有 id）的按名字成行——它们点进去也是按名字找。
+        key = ("did", r["did"]) if r["did"] else ("tag", r["tag"])
+        g = groups.get(key)
+        if g is None:
+            groups[key] = {"tag": r["tag"], "did": r["did"], "tag_last": r["last"],
+                           "n": r["n"], "w": r["w"] or 0, "first": r["first"],
+                           "last": r["last"], "play": r["play"] or 0,
+                           "draw": r["draw"] or 0}
+            continue
+        g["n"] += r["n"]
+        g["w"] += r["w"] or 0
+        g["play"] += r["play"] or 0
+        g["draw"] += r["draw"] or 0
+        if r["first"] is not None and (g["first"] is None or r["first"] < g["first"]):
+            g["first"] = r["first"]
+        if r["last"] is not None and (g["last"] is None or r["last"] > g["last"]):
+            g["last"] = r["last"]
+        # 名字取最近一次对局用的那个——与 deck_detail 的 recent_name 同规则。
+        if r["last"] is not None and (g["tag_last"] is None or r["last"] > g["tag_last"]):
+            g["tag"], g["tag_last"] = r["tag"], r["last"]
+
+    labels = limited_labels(conn)
+    items = []
+    for g in groups.values():
+        items.append({
+            "deck": g["tag"],
+            "deck_id": g["did"],
+            "label": label_for(g["tag"], g["did"], labels) or g["did"] or "套牌未记录",
+            "first_time": g["first"],
+            "last_time": g["last"],
+            "play": g["play"],
+            "draw": g["draw"],
+            **wr(g["w"], g["n"]),
+        })
+    items.sort(key=lambda it: (-(it["last_time"] or 0), it["label"]))
+
+    # 撞名的补「首次对局时间 起」。在切片之前判定，这样「补不补」只取决于筛选，
+    # 不取决于 limit——否则同一个入口在 limit=12 和 limit=20 下会显示不同的名字。
+    # 万一补完时间还撞（同一分钟开的两副），再挂一段 deck_id 兜底，保证行行可分。
+    seen: dict[str, int] = {}
+    for it in items:
+        seen[it["label"]] = seen.get(it["label"], 0) + 1
+    for it in items:
+        if seen[it["label"]] > 1:
+            it["label"] = f"{it['label']} · {_day_of(it['first_time'])} 起"
+    seen2: dict[str, int] = {}
+    for it in items:
+        seen2[it["label"]] = seen2.get(it["label"], 0) + 1
+    for idx, it in enumerate(items):
+        if seen2[it["label"]] > 1:
+            tail = it["deck_id"][:6] or f"第{idx + 1}行"
+            it["label"] = f"{it['label']} · {tail}"
+
+    return {"items": items[:limit], "total": len(items),
+            "unlabeled": unlabeled, "limit": limit, "focus": focus_info}
+
+
 def filter_options(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                    exclude_bot: bool = True, event: str | None = None,
                    family: str | None = None, mode: str | None = None,

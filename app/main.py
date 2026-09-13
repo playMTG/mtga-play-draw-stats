@@ -569,6 +569,24 @@ def api_filters(exclude_abnormal: bool = True, exclude_bot: bool = True,
              family, mode, deck)
 
 
+@app.get("/api/recent_decks")
+def api_recent_decks(exclude_abnormal: bool = True, exclude_bot: bool = True,
+                     event: str | None = None, family: str | None = None,
+                     mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$"),
+                     focus: bool = False,
+                     limit: int = Query(12, ge=1, le=50)):
+    """首页「最近在打的套牌」入口。
+
+    刻意不收 `deck` / `deck_id`：它是套牌旅程的选择器，跟随套牌筛选就没意义了
+    （详见 `stats.recent_decks` 的说明）。赛事／赛制／模式照常收窄。
+
+    `focus=1` 时，若没显式给赛事／赛制／模式，按近 30 天主赛制收窄；实际口径由
+    响应里的 `focus` 字段回传，前端据此写提示条。
+    """
+    return q(stats.recent_decks, limit, exclude_abnormal, exclude_bot,
+             event, family, mode, focus)
+
+
 @app.get("/api/deck_identities")
 def api_deck_identities(deck: str = Query(...),
                         exclude_abnormal: bool = True, exclude_bot: bool = True,

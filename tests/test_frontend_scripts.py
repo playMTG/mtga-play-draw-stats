@@ -33,6 +33,7 @@ CJS_TESTS = [
     "test_load_error_ui.cjs",
     "test_deck_label_ui.cjs",
     "test_deck_cascade_ui.cjs",
+    "test_recent_decks_ui.cjs",
 ]
 
 

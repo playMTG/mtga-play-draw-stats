@@ -49,7 +49,11 @@ async function api(path, extra) {
 function applyFormatFocus(focus) {
   const note = $("format-focus-note");
   if (!note) return;
-  const filtering = !!(params().toString());
+  // 「手动筛选后以筛选为准」判的是**用户真的挑了筛选条件**，不是 params() 非空。
+  // params() 永远带着 exclude_bot，拿它判会让这里恒为真——整块赛制自适应（提示条、
+  // body.dataset.formatFocus、三张卡的收放）都会变成死代码。2026-09-13 修。
+  const filtering = ["f-family", "f-event", "f-mode", "f-deck"]
+    .some(id => $(id)?.value);
   if (!focus || focus.primary === "unknown" || filtering) {
     note.hidden = true;
     document.body.dataset.formatFocus = "";
@@ -212,6 +216,54 @@ async function loadOverview() {
 
   // 周趋势（先后手柱状图与上方指标卡重复，已移除；各赛事胜率信息量不足，已移除）
   if ($("c-trend")) trendChartDraw(o.trend_weekly.slice(-12));
+}
+
+/* ---------- 首页入口：最近在打的套牌（V3 收尾） ---------- */
+// 这个区块是**套牌旅程的选择器**：一行一个 deck 身份，点名字就进已有的详情页。
+// 所以它刻意不跟随套牌筛选（跟随就只剩一行），但跟随赛事／赛制／模式。
+let recentDecksScope = "focus";   // "focus" = 按近 30 天主赛制收窄；"all" = 全部套牌
+
+function recentDecksNote(r) {
+  const f = r.focus || {};
+  const manual = ["f-family", "f-event", "f-mode"].map(id => $(id)?.value).filter(Boolean);
+  const parts = [];
+  if (manual.length) {
+    parts.push("已按当前筛选收窄，赛制切换以筛选为准。");
+  } else if (f.applied) {
+    parts.push(`近 ${f.window_days} 天主赛制：${f.label}`
+      + (f.share == null ? "" : `（约 ${f.share}%）`) + "，只列这个赛制；点「全部」看所有赛制。");
+  } else if (f.primary === "unknown") {
+    parts.push("近 30 天资料不足，无法判定主赛制，按全部套牌列出。");
+  } else if (recentDecksScope === "all") {
+    parts.push("不限赛制，按最近一次对局列出。");
+  }
+  parts.push(`共 ${r.total} 套牌。`);
+  if (r.unlabeled) parts.push(`另有 ${r.unlabeled} 场没记录套牌，点不进去，不计入。`);
+  if ($("f-deck").value) parts.push("套牌筛选不影响这个区块——它就是用来挑套牌的。");
+  return parts.join(" ");
+}
+
+async function loadRecentDecks() {
+  const v = uiVersion;
+  const r = await api("/api/recent_decks", {
+    limit: 8, focus: recentDecksScope === "focus" ? 1 : 0,
+  });
+  if (isStale(v)) return;
+  $("recent-decks-note").textContent = recentDecksNote(r);
+  $("recent-decks-rows").innerHTML = r.items.map(it => `
+    <div class="summary-item">
+      <strong>${deckOpenButton(it.deck, it.deck_id, "", it.label)}</strong>
+      <span class="ci">${it.n} 场 · 胜率 ${it.wr ?? "–"}%（${it.wins} 胜）· 先手 ${it.play} · 后手 ${it.draw} · 最近一次 ${fmtTime(it.last_time)}</span>
+    </div>`).join("")
+    || `<div class="ci">当前范围内没有可点开的套牌记录。</div>`;
+}
+
+function setRecentDecksScope(scope) {
+  recentDecksScope = scope;
+  $("rd-focus").classList.toggle("on", scope === "focus");
+  $("rd-all").classList.toggle("on", scope === "all");
+  // 返回 promise：按钮回调不用管，但测试要能 await 到「重渲染完成」再断言。
+  return loadRecentDecks().catch(() => {});
 }
 
 function mulliganView(m) {
@@ -445,16 +497,21 @@ function gameDetails(r) {
   return `<span class="ci" title="${esc(tip)}">${esc(mode)}</span>`;
 }
 
+function deckOpenButton(deck, deckId, deckVersion, name) {
+  // 套牌旅程的唯一入口按钮。payload 形状只在这里拼一次——明细、首页入口区都走它，
+  // 免得两处各拼一份、改了一处忘了另一处（openDeck 只认这三个键）。
+  const payload = encodeURIComponent(JSON.stringify({
+    deck: deck || "", deck_id: deckId || "", deck_version: deckVersion || "",
+  }));
+  return `<button class="link-button deck-open" data-deck="${esc(payload)}" title="查看这套牌的独立详情">${esc(name)}</button>`;
+}
+
 function deckLink(r, label) {
   // my_deck_label 是后端对限制赛临时牌组给出的可区分名（"轮抓 · 2024-10-05 21:03"）；
   // 客户端只给通用名「轮抽套牌」时，250 次 draft 在明细里根本分不清（V1）。
   const name = label || r.my_deck_label || r.my_deck_tag || "套牌未记录";
   if (!(r.my_deck_tag || r.my_deck_id || r.my_deck_version)) return esc(name);
-  const payload = encodeURIComponent(JSON.stringify({
-    deck: r.my_deck_tag || "", deck_id: r.my_deck_id || "",
-    deck_version: r.my_deck_version || "",
-  }));
-  return `<button class="link-button deck-open" data-deck="${esc(payload)}" title="查看这套牌的独立详情">${esc(name)}</button>`;
+  return deckOpenButton(r.my_deck_tag, r.my_deck_id, r.my_deck_version, name);
 }
 
 function matchRow(r) {
@@ -1088,7 +1145,8 @@ $("card-names-seed").addEventListener("click", async () => {
 // 而横幅里全是 app.js 内部的行号，看不出是哪个区块坏了（实测撞到过一次）。
 // 改成 allSettled + 汇总提示：失败要看得见，但不该拖垮其余内容（R13.4）。
 const RELOAD_SECTIONS = [
-  ["总览", loadOverview], ["调度", loadMulligans], ["对手主将", loadCommanders],
+  ["总览", loadOverview], ["最近在打的套牌", loadRecentDecks], ["调度", loadMulligans],
+  ["对手主将", loadCommanders],
   ["对手类型", loadOpponentTypes], ["对局明细", loadMatches], ["运行状态", loadStatus],
   ["段位曲线", loadRankCurve], ["被针对指数", loadTargeting], ["每日战报", loadDaily],
 ];
@@ -1259,6 +1317,8 @@ function syncMatchDayBtns() {
 }
 syncMatchDayBtns();
 $("m-group").addEventListener("change", loadMatches);
+$("rd-focus").addEventListener("click", () => setRecentDecksScope("focus"));
+$("rd-all").addEventListener("click", () => setRecentDecksScope("all"));
 $("m-more").addEventListener("click", () => {matchOffset+=matchLimit;loadMatches();});
 $("m-prev").addEventListener("click", () => {matchOffset=Math.max(0,matchOffset-matchLimit);loadMatches();});
 $("open-filter-deck").addEventListener("click", () => {

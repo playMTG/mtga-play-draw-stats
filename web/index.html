@@ -184,6 +184,16 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
     <div class="ci" style="margin-top:6px">争锋显示日志中明确记录的主将；明确的非主将构筑赛事可逐场标注对手类型。轮抽、现开和规则未知赛事显示“不适用”，不会算作类型缺失。</div>
 </section>
 
+<div class="card" style="margin-bottom:14px" id="recent-decks-card">
+  <div class="bar">
+    <h2 style="margin:0">最近在打的套牌</h2>
+    <button id="rd-focus" class="ti-btn on" title="按近 30 天主赛制收窄，只列这个赛制下的套牌">主赛制</button>
+    <button id="rd-all" class="ti-btn" title="不限赛制，按最近一次对局列出所有套牌">全部</button>
+    <span class="ci" id="recent-decks-note"></span>
+  </div>
+  <div id="recent-decks-rows" class="summary-list"></div>
+</div>
+
 <div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
   <div class="card"><h2>全史总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div></div>
   <div class="card"><h2>先手率 / 先手胜率</h2><div class="big" id="k-play-rate">–</div><div class="ci" id="k-play-rate-note"></div><div class="ci" id="k-play-ci" style="margin-top:4px"></div></div>
@@ -308,6 +318,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=0.4.3-quiet-ui"></script>
+<script src="app.js?v=0.5.0-recent-decks"></script>
 </body>
 </html>

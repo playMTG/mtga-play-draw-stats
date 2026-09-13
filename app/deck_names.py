@@ -47,13 +47,13 @@ def _format_time(ts) -> str:
     return datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M")
 
 
-def limited_labels(conn) -> dict[str, str]:
-    """deck_id -> 派生显示名；只包含「限制赛且名字不唯一」的身份。"""
-    ambiguous = ambiguous_tags(conn)
-    if not ambiguous:
-        return {}
-    labels: dict[str, str] = {}
-    for row in conn.execute(
+def _deck_rows(conn):
+    """每个 deck_id 的：名字、总场数、限制赛场数、轮抓场数、首次对局时间。
+
+    二级下拉（`identity_labels`）与明细显示名（`limited_labels`）共用这一份统计，
+    保证「下拉里看到的名字」与「明细里看到的名字」永远一致。
+    """
+    return conn.execute(
         """SELECT my_deck_id id, my_deck_tag tag,
                   COUNT(*) n,
                   SUM(CASE WHEN event_id LIKE '%Draft%' OR event_id LIKE '%Sealed%'
@@ -63,16 +63,60 @@ def limited_labels(conn) -> dict[str, str]:
              FROM matches
             WHERE COALESCE(my_deck_id, '') != ''
             GROUP BY my_deck_id"""
-    ):
+    ).fetchall()
+
+
+def _limited_kind(row) -> str | None:
+    """这个身份是不是限制赛；是的话返回「轮抓」或「现开」，否则 None。"""
+    n = row["n"] or 0
+    limited = row["limited"] or 0
+    if not n or limited / n < LIMITED_SHARE:
+        return None
+    # 轮抓与现开各自计数，取多的那个作为赛制名。
+    return "轮抓" if (row["draft"] or 0) * 2 >= limited else "现开"
+
+
+def limited_labels(conn) -> dict[str, str]:
+    """deck_id -> 派生显示名；只包含「限制赛且名字不唯一」的身份。"""
+    ambiguous = ambiguous_tags(conn)
+    if not ambiguous:
+        return {}
+    labels: dict[str, str] = {}
+    for row in _deck_rows(conn):
         if row["tag"] not in ambiguous:
             continue
-        n = row["n"] or 0
-        limited = row["limited"] or 0
-        if not n or limited / n < LIMITED_SHARE:
+        kind = _limited_kind(row)
+        if kind is None:
             continue
-        # 轮抓与现开各自计数，取多的那个作为赛制名。
-        kind = "轮抓" if (row["draft"] or 0) * 2 >= limited else "现开"
         labels[row["id"]] = f"{kind} · {_format_time(row['first_ts'])}"
+    return labels
+
+
+def identity_labels(conn) -> dict[str, str]:
+    """deck_id -> 二级下拉里用于区分身份的名字。
+
+    与 `limited_labels` 的区别：这里**覆盖所有重名身份**，因为下拉必须能区分
+    「我指的是哪一副」，而明细只在限制赛那一类上改名（用户自起的重名保持原样）。
+
+    - 限制赛沿用「轮抓／现开 · 首次对局时间」——与明细、详情标题一致；
+    - 其余重名用「首次对局时间 起」。
+
+    刻意**不带场数**：这里是全库口径，而两级下拉是求交（名字 + 身份），
+    场数得按当前筛选算，由 `stats.deck_identities` 单独给出，否则同一个身份
+    会出现「下拉里写 192 场、选完只有 47 场」的矛盾（改过名的套牌就会这样）。
+    """
+    ambiguous = ambiguous_tags(conn)
+    if not ambiguous:
+        return {}
+    labels: dict[str, str] = {}
+    for row in _deck_rows(conn):
+        if row["tag"] not in ambiguous:
+            continue
+        kind = _limited_kind(row)
+        if kind is not None:
+            labels[row["id"]] = f"{kind} · {_format_time(row['first_ts'])}"
+        else:
+            labels[row["id"]] = f"{_format_time(row['first_ts'])} 起"
     return labels
 
 

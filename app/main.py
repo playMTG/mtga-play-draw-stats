@@ -442,22 +442,24 @@ def cards_joinable(conn) -> bool:
 @app.get("/api/overview")
 def api_overview(exclude_abnormal: bool = True, exclude_bot: bool = True,
                  event: str | None = None, deck: str | None = None,
+                 deck_id: str | None = None,
                  family: str | None = None,
                  mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     return q(stats.overview, exclude_abnormal, event, deck, exclude_bot,
-             family=family, mode=mode)
+             family=family, mode=mode, deck_id=deck_id)
 
 
 @app.get("/api/matches")
 def api_matches(exclude_abnormal: bool = True, exclude_bot: bool = True,
                 event: str | None = None,
-                deck: str | None = None, limit: int = Query(200, ge=1, le=1000), offset: int = Query(0, ge=0),
+                deck: str | None = None, deck_id: str | None = None,
+                limit: int = Query(200, ge=1, le=1000), offset: int = Query(0, ge=0),
                 family: str | None = None, day: str | None = None,
                 mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     try:
         return q(stats.match_list, exclude_abnormal, event, deck,
                  limit, offset, cfg.get("card_name_lang", "zh"),
-                 exclude_bot, family=family, day=day, mode=mode)
+                 exclude_bot, family=family, day=day, mode=mode, deck_id=deck_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 
@@ -486,20 +488,23 @@ def api_deck_detail(deck: str | None = None, deck_id: str | None = None,
 
 @app.get("/api/mulligans")
 def api_mulligans(exclude_abnormal: bool = True, exclude_bot: bool = True,
-                  event: str | None = None, deck: str | None = None, family: str | None = None,
+                  event: str | None = None, deck: str | None = None,
+                  deck_id: str | None = None, family: str | None = None,
                   mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
-    return q(stats.mulligan_stats, exclude_abnormal, exclude_bot, event, deck, family, mode)
+    return q(stats.mulligan_stats, exclude_abnormal, exclude_bot, event, deck,
+             family, mode, deck_id)
 
 
 @app.get("/api/commanders")
 def api_commanders(exclude_abnormal: bool = True, exclude_bot: bool = True,
                    event: str | None = None, deck: str | None = None,
+                   deck_id: str | None = None,
                    family: str | None = None,
                    mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$"),
                    sort: str = Query("count", pattern="^(count|recent)$")):
     """对手主将档案。sort=count 按场次（默认）；sort=recent 按最近相遇时间。"""
     kw = dict(exclude_abnormal=exclude_abnormal, event=event, deck=deck,
-              family=family, mode=mode)
+              deck_id=deck_id, family=family, mode=mode)
     # sort 只属于 rows：commander_coverage 是样本覆盖率，没有排序概念。
     # 早前把 sort 一起塞进 kw 传给两边，coverage 收到未知参数直接 500（R13.3）
     rows = q(stats.matchups, root=cfg.root, lang=cfg.get("card_name_lang", "zh"),
@@ -511,10 +516,11 @@ def api_commanders(exclude_abnormal: bool = True, exclude_bot: bool = True,
 @app.get("/api/opponent_types")
 def api_opponent_types(exclude_abnormal: bool = True, exclude_bot: bool = True,
                        event: str | None = None, deck: str | None = None,
+                       deck_id: str | None = None,
                        family: str | None = None,
                        mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     return q(stats.opponent_type_stats, exclude_abnormal, exclude_bot,
-             event, deck, family, mode)
+             event, deck, family, mode, deck_id)
 
 
 @app.get("/api/rank_curve")
@@ -529,6 +535,7 @@ def api_rank_curve(track: str = "constructed"):
 def api_export(type: str = "matches", exclude_abnormal: bool = True,
                exclude_bot: bool = False,
                event: str | None = None, deck: str | None = None,
+               deck_id: str | None = None,
                family: str | None = None,
                mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     """CSV 导出（UTF-8 BOM，Excel 直接打开不乱码）。type: matches | ranks。"""
@@ -539,7 +546,7 @@ def api_export(type: str = "matches", exclude_abnormal: bool = True,
     if type not in ("matches", "ranks"):
         type = "matches"
     headers, rows = q(stats.export_rows, type, exclude_abnormal, event, deck,
-                      exclude_bot, family=family, mode=mode)
+                      exclude_bot, family=family, mode=mode, deck_id=deck_id)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(headers)
@@ -562,10 +569,26 @@ def api_filters(exclude_abnormal: bool = True, exclude_bot: bool = True,
              family, mode, deck)
 
 
+@app.get("/api/deck_identities")
+def api_deck_identities(deck: str = Query(...),
+                        exclude_abnormal: bool = True, exclude_bot: bool = True,
+                        event: str | None = None, family: str | None = None,
+                        mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
+    """二级联动：某个套牌名字下的各个身份（deck_id）。
+
+    首页套牌下拉只按名字分组，而本机 314 个名字里有 39 个被多个 deck_id 共用
+    （限制赛通用名 + 用户自起的重名）。选中这类名字时前端再拉一次本接口，
+    让用户指定「哪一次 draft / 哪一副同名套牌」，再用 deck_id 收窄全部区块。
+    """
+    return q(stats.deck_identities, deck, exclude_abnormal, exclude_bot,
+             event, family, mode)
+
+
 @app.get("/api/targeting")
 def api_targeting(window: str = "30", exclude_abnormal: bool = True,
                   exclude_bot: bool = True, event: str | None = None,
-                  deck: str | None = None, family: str | None = None,
+                  deck: str | None = None, deck_id: str | None = None,
+                  family: str | None = None,
                   mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     """被针对指数（§3.5）。window: 7 | 30 | all。"""
     days = None if window == "all" else (
@@ -573,18 +596,20 @@ def api_targeting(window: str = "30", exclude_abnormal: bool = True,
     def _calc(conn):
         return stats.targeting_index(conn, cfg, days, exclude_abnormal,
                                      exclude_bot, root=cfg.root, event=event, deck=deck, family=family,
-                                     mode=mode)
+                                     mode=mode, deck_id=deck_id)
     return q(_calc)
 
 
 @app.get("/api/daily")
 def api_daily(day: str | None = None, exclude_abnormal: bool = True,
               exclude_bot: bool = True, event: str | None = None,
-              deck: str | None = None, family: str | None = None,
+              deck: str | None = None, deck_id: str | None = None,
+              family: str | None = None,
               mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     from .insights import daily_report
     try:
-        return q(daily_report, day, exclude_abnormal, exclude_bot, event, deck, family, mode)
+        return q(daily_report, day, exclude_abnormal, exclude_bot, event, deck,
+                 family, mode, deck_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 

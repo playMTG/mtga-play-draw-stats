@@ -32,6 +32,7 @@ CJS_TESTS = [
     "test_commander_archetype_ui.cjs",
     "test_load_error_ui.cjs",
     "test_deck_label_ui.cjs",
+    "test_deck_cascade_ui.cjs",
 ]
 
 

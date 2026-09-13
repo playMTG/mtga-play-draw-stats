@@ -31,6 +31,9 @@ function params() {
   if (e) p.set("event", e);
   if (m) p.set("mode", m);
   if (d) p.set("deck", d);
+  // 二级联动：选中某个具体身份时再加 deck_id（与 deck 求交，不是替换）
+  const di = $("f-deck-id")?.value;
+  if (d && di) p.set("deck_id", di);
   return p;
 }
 
@@ -921,7 +924,38 @@ async function loadFilters() {
   fillSelect("f-mode", f.modes || []);
   $("event-name-list").innerHTML = f.events.map(e => `<p>${esc(e.label)}<br><code>${esc(e.value)}</code></p>`).join("") || "当前范围无赛事";
   fillSelect("f-deck", f.decks);
+  deckIdCounts = new Map((f.decks || []).map(d => [d.value, d.ids || 1]));
+  await syncDeckIdentities();
   $("open-filter-deck").disabled = !$("f-deck").value;
+}
+
+/* ---------- 二级联动：套牌名字 → 具体身份 ----------
+   套牌下拉按「名字」分组，而本机 314 个名字里有 39 个被多个 deck_id 共用：
+   限制赛的通用名（「轮抽套牌」188 个 id、「现开赛」48 个…）加上用户自己起的
+   重名（「红黑牺牲」2 个 id、「黑白中速」4 个…）。选中这类名字时才出现第二个
+   下拉，让用户指定「哪一次 draft / 哪一副同名套牌」，再用 deck_id 收窄全部区块。
+   只有这 39 个名字会多一层，其余 275 个完全无感。 */
+let deckIdCounts = new Map(), deckIdentities = [];
+
+async function syncDeckIdentities() {
+  const wrap = $("f-deck-id-wrap"), sel = $("f-deck-id");
+  if (!wrap || !sel) return;
+  const tag = $("f-deck").value;
+  const keep = sel.value;
+  const reset = () => { wrap.hidden = true; sel.innerHTML = `<option value="">全部</option>`; deckIdentities = []; };
+  // 名字唯一（或没选名字）时不需要第二级
+  if (!tag || (deckIdCounts.get(tag) || 1) < 2) { reset(); return; }
+  const v = uiVersion;
+  let r;
+  try { r = await api("/api/deck_identities", { deck: tag }); }
+  catch { reset(); return; }
+  if (isStale(v) || $("f-deck").value !== tag) return;
+  deckIdentities = r.items || [];
+  sel.innerHTML = `<option value="">全部（${r.total}）</option>`
+    + deckIdentities.map(it => `<option value="${esc(it.value)}">${esc(it.label)}（${it.n}）</option>`).join("");
+  // 换了上游筛选后原选中项可能已不在列表里，那就回到「全部」
+  sel.value = deckIdentities.some(it => it.value === keep) ? keep : "";
+  wrap.hidden = false;
 }
 
 /* ---------- 段位曲线（M4） ---------- */
@@ -1162,8 +1196,15 @@ async function onFilterChange() {
 $("f-family").addEventListener("change", () => {$("f-event").value="";$("f-deck").value="";onFilterChange();});
 $("f-event").addEventListener("change", () => {$("f-deck").value="";onFilterChange();});
 $("f-mode").addEventListener("change", onFilterChange);
-$("f-deck").addEventListener("change", () => {
+$("f-deck").addEventListener("change", async () => {
+  // 换了名字，上一级的身份选择作废
+  $("f-deck-id").value = "";
   $("open-filter-deck").disabled = !$("f-deck").value;
+  matchOffset=0;bumpUiVersion();
+  await syncDeckIdentities();
+  await reload();
+});
+$("f-deck-id").addEventListener("change", () => {
   matchOffset=0;bumpUiVersion();reload();
 });
 $("f-bot").addEventListener("click", async () => {
@@ -1217,7 +1258,7 @@ $("m-group").addEventListener("change", loadMatches);
 $("m-more").addEventListener("click", () => {matchOffset+=matchLimit;loadMatches();});
 $("m-prev").addEventListener("click", () => {matchOffset=Math.max(0,matchOffset-matchLimit);loadMatches();});
 $("open-filter-deck").addEventListener("click", () => {
-  if ($("f-deck").value) openDeck({deck:$("f-deck").value, deck_id:"", deck_version:""});
+  if ($("f-deck").value) openDeck({deck:$("f-deck").value, deck_id:$("f-deck-id").value || "", deck_version:""});
 });
 $("deck-close").addEventListener("click", () => $("deck-dialog").close());
 $("deck-mode").addEventListener("change", () => {$("deck-version").value="";deckCommander="";deckObservation="";loadDeckDetail();});

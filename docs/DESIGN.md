@@ -428,9 +428,36 @@ const results = await Promise.allSettled(
 - `app/deck_detail.py`：命中时 `title` 用派生名，`same_name_unlinked` 归零，并在 `identity.note` 里说明改名由来（原名留痕）；`records` 也带 `my_deck_label`。
 - `web/app.js`：`deckLink` 与详情页核对表的套牌列改用 `my_deck_label || my_deck_tag`。
 
-**本轮不做**：套牌**筛选下拉**仍按 `my_deck_tag` 分组（「轮抽套牌」还是一个 1625 场的条目，含 188 次 draft）。按 `deck_id` 拆分会让下拉从 314 项涨到约 630 项，需要新的筛选维度，留作下一步。
-
 **测试**：`tests/test_deck_names.py` 八条（含「用户自起重名套牌保持原名」「非限制赛不派生」「同一 tag 混合赛制只改限制赛那个」三个不误伤方向）+ `tests/test_deck_label_ui.cjs`（前端取字段顺序与回退）。两条关键断言都用「临时回退 → 断言失败 → 还原」验证过不是空转。
+
+
+## V1 续做 套牌筛选二级联动
+
+**问题**：套牌筛选下拉按 `my_deck_tag`（客户端牌组名）分组，本机 314 项里 **39 个名字被多个 `my_deck_id` 共用，占 3,492 场 = 31.9%**。选「红黑牺牲」把两副不同的牌合在一起看；选「轮抽套牌」则把 188 次 draft 合成一个 1625 场的条目。上一节已解决**显示名**（明细和详情页能认出来了），但**筛选下拉**仍认不出，首页所有区块都收不到「只看某一次 draft」这个粒度。
+
+**为什么不把下拉展开成 630 项**：按 `deck_id` 拆开会让下拉从 314 项涨到约 630 项，而且 250 个 draft 条目长得一样。**改成二级联动**——第一级仍是 314 个名字，只有选中「重名」名字时才出现第二级，正好覆盖那 39 项。
+
+**两级语义是「求交」，不是替换**：`deck`（名字）与 `deck_id`（身份）同时出现时两个条件都加。
+
+```sql
+WHERE COALESCE(my_deck_tag,'') = ? AND COALESCE(my_deck_id,'') = ?
+```
+
+选「脂牙 → 2022-06-02 起」要的是「**脂牙这个名字下、属于这一副**」的对局，而不是这一副套牌的全部对局（它可能还用过别的历史名字）。这样两级下拉的场数才加得起来：47 + 37 = 84 = 「脂牙」的场数。**写成「`deck_id` 优先于 `deck`」是错的**——实测会出现「身份行显示 192 场（全库口径）而该名字下只有 47 场」的自相矛盾。
+
+**身份名不带场数**：第二级选项写「轮抓 · 2026-06-10 12:16」而不写「192 场」。`identity_labels` 是全库口径的名字，而场数按当前筛选算，混在一起就会出现「下拉写 192 场、选完只有 47 场」的矛盾（改过名的套牌就是这样）。场数放在括号里按当前筛选单独算（`全部（113）` / `111 场` / `2 场`），两者职责分开。
+
+**实现**：
+
+- `app/deck_names.py`：抽出 `_deck_rows()` 供 `limited_labels()`（明细显示名）与 `identity_labels()`（二级下拉名）共用，保证「下拉里看到的名字」与「明细里看到的名字」永远一致；`identity_labels` 覆盖**所有**重名身份，限制赛派生「轮抓／现开 · 时间」，其余「时间 起」，刻意不带场数。
+- `app/stats.py`：`_filters` 加 `deck_id`（求交）；新增 `_deck_scope_cond()`（从 `filter_options` 抽出，供身份列表复用）与 `deck_identities()`（身份名取自全库、场数按当前筛选）；`filter_options` 的每个 deck 项加 `ids`（该名字下的 deck_id 数）。`deck_id` 透传到 `overview`／`opponent_type_stats`／`matchups`／`commander_coverage`／`match_list`／`export_rows`／`mulligan_stats`／`targeting_index`。
+- `app/main.py`：8 个既有端点加 `deck_id` 参数并透传；新增 `GET /api/deck_identities?deck=<名字>`。
+- `web/app.js`：`params()` 只在两级都选中时加 `deck_id`（`deck` 保留）；`loadFilters` 记下每个名字的 `ids`；`syncDeckIdentities()` 在 `ids > 1` 时才请求并显示第二级，否则收起清空；换名字时清空二级再刷新。
+- `web/index.html`：`#f-deck` 后加 `#f-deck-id-wrap`（默认 `hidden`）；缓存失效参数 `0.4.2-deck-cascade`。
+
+**测试**：`tests/test_deck_identities.py` 七条（含「两级求交而不是替换」这条关键断言）+ `tests/test_deck_cascade_ui.cjs`（`ids>1` 才请求、选项值必须是 deck_id、换名收起）。「求交」那条已用「临时改成 `deck_id` 优先 → `assert 5 == 3` 失败 → 还原」验证过不是空转。
+
+**实测**：`ids > 1` 正好 39 项。「红黑牺牲」出现第二级（`全部（113）`／`111 场`／`2 场`）→ 选大的一副 → 明细 `共 111 场`；「轮抽套牌」188 个 draft／合计 1288 场，选一个 → `共 132 场`；`W3`／`W4`（唯一名）第二级不出现；切回唯一名第二级消失。场数加总独立核对：`脂牙` 47+37=84、`红黑牺牲` 111+2=113、`轮抽套牌` 188 项合计 1288，全部与 `/api/filters` 的 `n` 一致。
 
 
 

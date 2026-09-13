@@ -11,9 +11,9 @@ from .targeting import binom_cdf, chi2_sf, max_loss_streak, p_to_score
 
 
 def records(conn, exclude_abnormal=True, exclude_bot=True, event=None, deck=None,
-            family=None, mode=None):
+            family=None, mode=None, deck_id=None):
     from .stats import _filters
-    conds, args = _filters(conn, event, deck, family, mode)
+    conds, args = _filters(conn, event, deck, family, mode, deck_id=deck_id)
     if exclude_abnormal:
         conds.append("is_abnormal=0")
     if exclude_bot:
@@ -82,11 +82,11 @@ def aggregate(rows):
 
 
 def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
-                 event=None, deck=None, family=None, mode=None):
+                 event=None, deck=None, family=None, mode=None, deck_id=None):
     from .stats import event_family, friendly_event, is_constructed_opponent_event
     today = datetime.now().date()
     chosen = datetime.strptime(day, '%Y-%m-%d').date() if day else today
-    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode)
+    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode, deck_id)
     dated = [r for r in rows if r['start_time'] is not None]
     dates = Counter(datetime.fromtimestamp(r['start_time']/1000).date().isoformat() for r in dated)
     selected = [r for r in dated if datetime.fromtimestamp(r['start_time']/1000).date() == chosen]
@@ -151,10 +151,10 @@ def _two_sample(a, n, b, m):
 
 
 def targeting(conn, cfg=None, window_days=30, exclude_abnormal=True, exclude_bot=True,
-              root=None, event=None, deck=None, family=None, mode=None):
+              root=None, event=None, deck=None, family=None, mode=None, deck_id=None):
     from .stats import _ti_cfg
     min_n = int(_ti_cfg(cfg)['min_sample'])
-    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode)
+    rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode, deck_id)
     now = datetime.now()
     # 包含今天的 N 个本地自然日；未知时间不能偷偷落入最近窗口。
     start = datetime.combine(now.date()-timedelta(days=window_days-1), datetime.min.time()) if window_days else None

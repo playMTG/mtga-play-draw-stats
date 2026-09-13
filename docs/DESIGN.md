@@ -600,3 +600,43 @@ label = limited_labels[did]  ||  该 did 最近一次对局的 my_deck_tag
 - 切「全部」：`共 686 套牌`，`现开赛 · 2026-09-04 19:19/19:59/21:07/22:25/22:43 起` 五行各不相同；`另有 6 场没记录套牌`。
 - 手选赛制：提示条改为「已按当前筛选收窄，赛制切换以筛选为准。」，`format-focus-note` 隐藏、`dataset.formatFocus` 清空。
 - 卡片位置：`previousElementSibling` 是每日战报的 `section.card`，`nextElementSibling` 是总览 `grid g3`。控制台无错误。
+
+## 清理 2026-09-13 前端死代码与一条假覆盖测试
+
+V3 收尾时发现 `applyFormatFocus` 整块是死代码（见上一节），顺着用同一条判据扫了一遍：**「定义了但文件内部没人引用」**。`web/app.js` 里三个函数中招，其中一个是「测试守着一个页面永不调用的函数」。
+
+### 三个死函数（连带的两个变量、一个插件）
+
+| 名字 | 调用点何时被删 | 当时为什么删 |
+|---|---|---|
+| `barChart` + 误差线插件 `ciPlugin`（含 `Chart.register(ciPlugin)`） | `396677b`「Drop redundant play/draw and per-event charts」 | 先后手柱状图与各赛事柱状图与上方指标卡重复 |
+| `matchDetails` | 同上（同一提交把 `<td>${matchDetails(r)}</td>` 换成「…」+ title） | 「BO1 rows no longer expand a long details panel」——每行一块折叠面板太高 |
+| `dimVerdictColor` | `66be77d`「targeting card rewrite - plain-language verdicts」 | 彩色判定改成朴素 `.tag` 标签 |
+
+连带死掉的还有：`fmtDur`（只被 `matchDetails` 用）、顶层变量 `pdChart` 与 `eventChart`（那两张图的实例变量，只剩 `trendChart`／`rankChart` 在用）。
+
+**确认没有孤儿 DOM**：`index.html` 里只有 `#c-trend`、`#c-rank` 两个 canvas，与现存的两张图一一对应。
+
+### 关键问题：`tests/test_match_ui.cjs` 在守死代码
+
+它调用 `context.matchDetails(known)` 并断言 6 条（`<summary>查看</summary>`、用时、结束原因、数据来源、套牌 ID、构筑版本）。而 `matchDetails` 在同一提交里就已经没人调用了——**测试全绿，但它守的代码页面永不执行**。这比「没有测试」更坏：它让「这块有人管」看起来成立。
+
+改法：删掉 `matchDetails` 的断言，改为断言**页面真正渲染的东西**——最后一列 `…` 的 `title`（`来源 X · 调度 Y · 结束原因 Z · match_id`），并加一条 `assert.doesNotMatch(row, /<details/)` 钉住「行内不再有折叠面板」。
+
+顺带补了一条**列数契约**：表头 `<th>` 数 == `matchRow` 的 `<td>` 数 == 分组行的 `colspan`。`396677b` 把列数从 10 减到 9 时三处必须一起改，之前没有任何守卫。实测：200 行数据、9 个 `<td>`、9 个 `<th>`、`colspan="9"`。
+
+### 新增守卫：`test_ui_ids.py::test_no_dead_top_level_definitions_in_app_js`
+
+浏览器只加载 `app.js`，`index.html` 也没有内联事件处理器（全部走 `addEventListener`），所以**只被 `.cjs` 测试引用的函数同样是死代码**。守卫的做法是：抽出 app.js 所有顶层函数／箭头常量定义，逐个统计它在 **app.js 内部**的出现次数，`<= 1`（只有定义）即报错。`$` 与 `Chart` 是 DOM／CDN 全局，进白名单。
+
+**空转验证两处**（全部还原）：临时加 `function deadProbe(){}` → 报 `['deadProbe']`；临时把 `matchDetails` 加回去（只被 `.cjs` 测试引用）→ 报 `['matchDetails']`。第二处正是本次要防的情形，说明「测试引用」不会让它蒙混过关。
+
+**范围说明**：这条守卫只看 app.js 内部引用，所以它守不住「被调用但判断恒假」（上一节那个 `params().toString()` 就属于那一类）——那类问题只能靠行为断言，见 `tests/test_recent_decks_ui.cjs` 注入非空 `params()` 的做法。
+
+### 不丢能力
+
+被 `matchDetails` 展示过的字段里，**时长(秒)、总回合、异常、异常原因、我方调度、match_id 都在 CSV 导出里**（`export_rows` 的 matches 表头）。所以这次清理不减少可获取的信息，只是把明细行的 title 维持在原来的子集（`…` 列表头写的「来源、调度、结束原因等」）。
+
+### 验收
+
+`pytest tests/ -q` → **270 passed**（较 269 多 1 条守卫）；`node --check web/app.js` 通过；`git diff --stat` 净删 72 行（app.js 6 增 78 删）。浏览器实测：`#c-trend` 仍有 Chart 实例且画布 539×220（**删掉 `Chart.register(ciPlugin)` 没有影响现存两张图**），`#c-rank` 有实例但按 V3 口径在争锋焦点下隐藏，明细 200 行 9 列、行内 0 个 `<details>`、控制台 0 错误。缓存失效参数 `0.5.0-recent-decks` → `0.5.1-dead-code`。

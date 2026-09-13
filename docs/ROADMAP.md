@@ -119,6 +119,13 @@ R10 已分成：BO 模式统一筛选与逐局入口、构筑对手类型的手�
 ## 交接记录
 
 - 当前进度：R1—R10.3、R11.1—R11.6、R12.1—R12.5、R13.1—R13.4 全部完成。下一版方向从 [VISION.md](VISION.md) 重新排优先级，不在本路线图中自动追加编号。**VISION 的剩余项已在 2026-09-13 清空**（轮抓筛选拆分、赛事译名核验、V3 收尾三项均已完成）。
+- 前端死代码清理（顺着 V3 收尾那个「恒为真的判断」找同类问题，不占新的 R 编号）：
+  - **判据**：「定义了但 `app.js` 内部没人引用」。浏览器只加载 `app.js`，`index.html` 也没有内联事件处理器（全走 `addEventListener`），所以**只被 `.cjs` 测试引用的函数同样是死代码**。
+  - **清掉三个**：`barChart` + 误差线插件 `ciPlugin`（含 `Chart.register(ciPlugin)`）与 `matchDetails` 的调用点都在 `396677b`（「Drop redundant play/draw and per-event charts」「BO1 rows no longer expand a long details panel」）被删；`dimVerdictColor` 在 `66be77d`（targeting 改朴素措辞）被删。连带死掉的还有 `fmtDur`（只被 `matchDetails` 用）与顶层变量 `pdChart`／`eventChart`。`index.html` 里只有 `#c-trend`／`#c-rank` 两个 canvas，没有孤儿 DOM。
+  - **最值得记的一条**：`tests/test_match_ui.cjs` 有 6 条断言在守 `matchDetails`——**守着一个页面永不调用的函数**，测试全绿却什么也没守住。改为断言页面真正渲染的东西（最后一列 `…` 的 `title`）＋ 一条 `assert.doesNotMatch(row, /<details/)`。另补列数契约：表头 `<th>` 数 == `matchRow` 的 `<td>` 数 == 分组行 `colspan`（`396677b` 把 10 列减到 9 时三处必须同改，此前无守卫）。
+  - **新增守卫** `tests/test_ui_ids.py::test_no_dead_top_level_definitions_in_app_js`：统计每个顶层定义在 app.js 内的出现次数，`<= 1` 即报错（`$`／`Chart` 是全局，白名单）。空转验证两处（全部还原）：临时加 `deadProbe` → 报 `['deadProbe']`；临时把 `matchDetails` 加回去 → 报 `['matchDetails']`。**它守不住「被调用但判断恒假」那一类**（V3 那个 `params().toString()` 就是），那类只能靠行为断言。
+  - **不丢能力**：`matchDetails` 展示过的 时长(秒)／总回合／异常／异常原因／我方调度／match_id 都在 CSV 导出里。
+  - 验收：`pytest tests/ -q` → **270 passed**（较 269 多 1 条守卫）；`node --check web/app.js` 通过；app.js 净删 72 行。浏览器实测：`#c-trend` 仍有 Chart 实例、画布 539×220（删掉 `Chart.register(ciPlugin)` 没影响现存两张图），`#c-rank` 有实例但按 V3 口径在争锋焦点下隐藏，明细 200 行 9 列、行内 0 个 `<details>`、控制台 0 错误。缓存失效参数 `0.5.0-recent-decks` → `0.5.1-dead-code`。见 [DESIGN.md](DESIGN.md)「清理 2026-09-13 前端死代码与一条假覆盖测试」。
 - V3 收尾（按 VISION 的剩余项，不占新的 R 编号）：**首页「最近在打的套牌」入口区 + 修掉从未生效的赛制自适应**。
   - **查出一个从落地起就没生效过的功能**：`applyFormatFocus()` 用 `const filtering = !!(params().toString())` 判「用户有没有手动筛选」，而 `params()` **永远**会 `set("exclude_bot", …)` → `toString()` 恒非空、`filtering` 恒为真，函数每次都在第一行 `return`。后果是 VISION V3 写的「首页提示条 + 收放对手主将/段位/构筑类型区块」从 `4ccb511` 起就是死代码：`#format-focus-note` 永远隐藏、`body.dataset.formatFocus` 永远空串、三张卡的 `hidden` 从没被设过。**纯前端 `.cjs` 假 DOM 测试照不出来**（既不触发 `params` 依赖链，也没有 CSS）。改为判四个筛选控件有没有值。
   - **新增入口**：`#recent-decks-card`「最近在打的套牌」，位置在每日战报之后、三张总览卡之前。按 **deck 身份（`my_deck_id`）** 一行一副，限制赛每次 draft 各自成行；名字取「限制赛派生名优先，否则**最近一次**的 `my_deck_tag`」（与详情页标题同口径），只有撞名才补「首次对局时间 起」（分钟精度，`Yargle_Day` 那 5 副同一天连着开，只到日期会重名五次；再撞用 `deck_id[:6]` 兜底）。点名字即进已有的套牌旅程。

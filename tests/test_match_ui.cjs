@@ -7,7 +7,6 @@ const esc = value => String(value ?? '');
 const context = vm.createContext({
   esc,
   fmtTime: value => `time:${value}`,
-  fmtDur: value => value == null ? '未记录' : `${value} 秒`,
   eventMarkup: (raw, label) => label || raw || '赛事未记录',
   cardsMarkup: (cards, fallback = []) => cards?.length
     ? cards.map(card => card.name).join(' / ')
@@ -40,7 +39,6 @@ const known = {
   ],
 };
 const row = context.matchRow(known);
-const details = context.matchDetails(known);
 assert.match(row, /拿杜/);
 assert.match(row, /有翼智者，拿杜/);
 assert.match(row, /群落之怒，阿耶尼/);
@@ -48,12 +46,26 @@ assert.match(row, /BO3/);
 // 逐局信息已从「内联展开」改为「悬停 title」（gameDetails 的 BO3 分支）：
 // 摘要行只显示赛制，逐局明细放在 title 里，不再占表格行高
 assert.match(row, /title="G1 后手 负 · G2 先手 胜"/);
-assert.match(details, /<summary>查看<\/summary>/);
-assert.match(details, /用时：.*120 秒/);
-assert.match(details, /结束原因.*投降/);
-assert.match(details, /数据来源.*Untapped 历史导入/);
-assert.match(details, /套牌 ID.*deck-1/);
-assert.match(details, /构筑版本.*version-1/);
+
+// 逐场诊断压在最后一列的 title 里，不再每行展开一块折叠面板
+// （396677b「BO1 rows no longer expand a long details panel」）。
+// 这条断言的是**页面真正渲染的东西**——原先这里断言的是 `matchDetails()`，
+// 而那个函数在同一提交里就没人调用了，等于在守死代码（2026-09-13 修正）。
+assert.match(row, /title="来源 Untapped 历史导入 · 调度 1 · 投降 · known"/);
+assert.doesNotMatch(row, /<details/, '明细行里不该再有逐行折叠面板');
+
+// 列数契约：表头 <th> 数 == matchRow 的 <td> 数 == 分组行的 colspan。
+// 396677b 把折叠面板换成「…」列时列数从 10 减到 9，三处必须一起改。
+const html = fs.readFileSync('web/index.html', 'utf8');
+const thead = html.match(/<table id="t-m"[\s\S]*?<\/thead>/);
+assert.ok(thead, '找不到明细表 t-m 的表头');
+const thCount = (thead[0].match(/<th[\s>]/g) || []).length;
+const tdCount = (row.match(/<td[\s>]/g) || []).length;
+assert.equal(thCount, 9, '明细表 9 列');
+assert.equal(tdCount, thCount, '明细行的列数必须与表头一致');
+const groupRow = source.match(/<tr><td colspan="(\d+)"><strong>/);
+assert.ok(groupRow, '找不到明细表的分组行');
+assert.equal(Number(groupRow[1]), thCount, '分组行的 colspan 必须等于表头列数');
 
 const unknown = context.matchRow({
   ...known, match_id: 'unknown', my_deck_tag: '名字里写着某主将',
@@ -67,4 +79,4 @@ assert.match(unknown, /<td class="clip"[^>]*>.*<\/td>\s*<td>–<\/td>/s);
 const noGames = context.gameDetails({...known, match_mode: '未知', games: []});
 assert.match(noGames, /未知/);
 
-console.log('Match details identity and folded-diagnostics checks passed');
+console.log('Match list: 逐场诊断 title、列数契约、主将列占位 检查通过');

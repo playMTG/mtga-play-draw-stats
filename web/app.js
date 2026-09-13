@@ -10,13 +10,10 @@ const localDay = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0
 let matchDay = localDay(new Date()), matchLimit = 200, matchOffset = 0;
 const fmtTime = (ms) =>
   ms ? new Date(ms).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
-const fmtDur = (s) => {
-  if (s == null) return "–";
-  const m = Math.round(s / 60);
-  return m >= 1 ? `${m}分` : `${Math.round(s)}秒`;
-};
 
-let pdChart = null, trendChart = null, eventChart = null, rankChart = null;
+// 只留仍在渲染的两张图。pdChart／eventChart 随 `396677b`「Drop redundant play/draw
+// and per-event charts」一起被删掉了调用点，留着变量只会让人以为还有那两张图。
+let trendChart = null, rankChart = null;
 let rankTrack = "constructed";
 /** 筛选版本号：任何筛选变化递增；渲染前必须仍是当前版本（R11.4/H4）。 */
 let uiVersion = 0;
@@ -91,56 +88,9 @@ function bigCard(id, ciId, w) {
     : "";
 }
 
-function barChart(canvasId, labels, values, los, his, color) {
-  const ctx = $(canvasId).getContext("2d");
-  return new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [{
-        data: values,
-        backgroundColor: color,
-        borderRadius: 4,
-        errorBar: { lo: los, hi: his },
-      }],
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: {
-        y: { min: 0, max: 100, ticks: { callback: (v) => v + "%" } },
-      },
-    },
-  });
-}
-
-/* Chart.js 误差线（无官方插件，用自定义 plugin 画 CI） */
-const ciPlugin = {
-  id: "ci",
-  afterDatasetsDraw(chart) {
-    const ds = chart.data.datasets[0];
-    if (!ds.errorBar) return;
-    const { ctx } = chart;
-    const meta = chart.getDatasetMeta(0);
-    const y = chart.scales.y;
-    ctx.save();
-    ctx.strokeStyle = "#6b7280";
-    ctx.lineWidth = 1.5;
-    meta.data.forEach((bar, i) => {
-      const lo = y.getPixelForValue(ds.errorBar.lo[i]);
-      const hi = y.getPixelForValue(ds.errorBar.hi[i]);
-      const x = bar.x;
-      ctx.beginPath();
-      ctx.moveTo(x, hi); ctx.lineTo(x, lo);
-      ctx.moveTo(x - 6, hi); ctx.lineTo(x + 6, hi);
-      ctx.moveTo(x - 6, lo); ctx.lineTo(x + 6, lo);
-      ctx.stroke();
-    });
-    ctx.restore();
-  },
-};
-Chart.register(ciPlugin);
-
+// 先后手／各赛事柱状图与 `barChart` + 误差线插件 `ciPlugin` 一起删掉了调用点
+// （`396677b`「Drop redundant play/draw and per-event charts」），定义也一并清掉：
+// 留着的唯一效果是让人以为页面上还有那两张图。现在只有下面两条曲线。
 function trendChartDraw(rows) {
   if (trendChart) trendChart.destroy();
   trendChart = new Chart($("c-trend"), {
@@ -465,21 +415,6 @@ function sourceLabel(source) {
 
 function endReasonLabel(reason) {
   return ({Concede:"投降", Game:"正常结束", Timeout:"超时"})[reason] || reason || "未记录";
-}
-
-function matchDetails(r) {
-  const items = [
-    ["回合", r.total_turns ?? "未记录"], ["用时", fmtDur(r.duration_sec)],
-    ["我方调度", r.my_mulls ?? "未记录"], ["结束原因", endReasonLabel(r.end_reason)],
-    ["数据来源", sourceLabel(r.source)], ["对局编号", r.match_id || "未记录"],
-  ];
-  if (r.my_deck_id) items.push(["套牌 ID", r.my_deck_id]);
-  if (r.my_deck_version) items.push(["构筑版本", r.my_deck_version]);
-  if (r.is_bot) items.push(["记录标记", "Bot 局"]);
-  if (r.is_abnormal || r.abnormal_reason) items.push(["诊断标记", r.abnormal_reason || "异常"]);
-  return `<details><summary>查看</summary><div class="match-details ci">${items.map(
-    ([label,value]) => `<span><strong>${esc(label)}：</strong>${esc(value)}</span>`
-  ).join("")}</div></details>`;
 }
 
 function gameDetails(r) {
@@ -1178,13 +1113,6 @@ function reportLoadFailures(failed, fatal = false) {
 
 // ---------- 你被针对了吗（§3.5） ----------
 let tiWindow = "30";
-
-function dimVerdictColor(v) {
-  return v === "高度可疑" ? "var(--win)"
-    : v === "偏邪门" ? "#d4501a"
-    : v === "有点怪" ? "var(--warn)"
-    : "var(--loss)";
-}
 
 function dimBar(d) {
   return `<div class="dim"><div class="dim-head"><strong>${esc(d.label)}</strong>

@@ -7,7 +7,7 @@ const $ = id => {if(!elements.has(id)) elements.set(id, {value:'',textContent:''
 let scope='old'; const pending=[];
 // matchDay 是战报与对局明细共用的日期状态，定义在 app.js 开头（不在下面两段切片内），
 // 需显式注入；syncMatchDayBtns 同理，用空实现顶替。
-const context = vm.createContext({$,params:()=>scope,api:()=>new Promise(resolve=>pending.push(resolve)),esc:String,fmtTime:String,fmtDur:String,Set,matchDay:'2026-01-02',syncMatchDayBtns:()=>{}});
+const context = vm.createContext({$,params:()=>scope,api:()=>new Promise(resolve=>pending.push(resolve)),esc:String,fmtTime:String,Set,matchDay:'2026-01-02',syncMatchDayBtns:()=>{}});
 vm.runInContext(source.slice(source.indexOf('function eventMarkup'),source.indexOf('async function loadMatches')),context);
 vm.runInContext(source.slice(source.indexOf('function dailyQualityView'),source.indexOf('function fillSelect')),context);
 const response = text => ({date:'2026-01-02',plain:text,is_today:false,latest_date:null,highlights:[],highlight_records:[],events:[{event:'Ladder',label:'标准排位',n:1,wins:1,losses:0,play:1,draw:0,unknown_pd:0}],modes:[],unknown_date:0,

@@ -42,6 +42,15 @@ summary:{n:1,wins:1,losses:0,play:1,draw:0,unknown_pd:0,win_rate:{wr:100,n:1},pl
  const backRun=context.loadDaily(); pending[pending.length-1](back); await backRun;
  assert.equal($('daily-summary').hidden,false,'有对局的日期统计卡应重新出现');
  assert.match($('daily-pd-streaks').innerHTML,/当天最长/,'有对局的日期应显示「当天最长」');
+ // 只有一种 BO 模式时，「BO1：N 场」只是把当天总数原样复述一遍（用户反馈：这种情况显示 BO1 没意义）。
+ // 只有确实存在模式拆分（≥2 种）时才占一行。
+ const one=response('单一模式'); one.modes=[{mode:'BO1',n:1,wins:1,losses:0}];
+ const oneRun=context.loadDaily(); pending[pending.length-1](one); await oneRun;
+ assert.doesNotMatch($('daily-events').innerHTML,/BO1：/,'只有一种模式时不该重复列出 BO1');
+ const two=response('两种模式'); two.modes=[{mode:'BO1',n:1,wins:1,losses:0},{mode:'BO3',n:2,wins:1,losses:1}];
+ const twoRun=context.loadDaily(); pending[pending.length-1](two); await twoRun;
+ assert.match($('daily-events').innerHTML,/BO1：1 场/,'存在模式拆分时应列出 BO1');
+ assert.match($('daily-events').innerHTML,/BO3：2 场/,'存在模式拆分时应列出 BO3');
  // R13：选「全部日期」时战报是单日口径、没有意义——藏起战报区且不再发请求
  const sent=pending.length;
  context.matchDay='';

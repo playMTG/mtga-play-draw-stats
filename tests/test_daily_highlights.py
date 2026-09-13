@@ -74,11 +74,40 @@ def test_hot_wr_no_lab_numbers():
 
 
 def test_repeat_commander_is_banter():
-    rows = [row(i, pd='play' if i % 2 else 'draw', commander='A' if i < 3 else 'B') for i in range(5)]
+    """零散遇到三次（中间夹着别人）：保持原来的轻说法，不升级。"""
+    rows = [row(0, pd='play', result='win', commander='A'),
+            row(1, pd='draw', result='loss', commander='B'),
+            row(2, pd='play', result='win', commander='A'),
+            row(3, pd='draw', result='loss', commander='B'),
+            row(4, pd='play', result='win', commander='A')]
     facts = highlights(rows)
     rep = next(f for f in facts if f['kind'] == 'repeat_commander')
     assert 'A' in rep['text']
+    assert rep['n'] == 3
+    assert 'streak' not in rep
     assert any(w in rep['text'] for w in ('缘分', '又', '老朋友', '孽缘', '怎么又是'))
+
+
+def test_consecutive_repeat_commander_is_extreme():
+    """连续三把都是同一个人：说法要更重，证据只挂连着的这三场。"""
+    rows = [row(0, pd='play', result='win', commander='阿耶尼'),
+            row(1, pd='draw', result='loss', commander='阿耶尼'),
+            row(2, pd='play', result='win', commander='阿耶尼')]
+    rep = next(f for f in highlights(rows) if f['kind'] == 'repeat_commander')
+    assert rep['streak'] == 3
+    assert rep['level'] == 'legendary'
+    assert rep['n'] == 3
+    assert rep['match_ids'] == ['0', '1', '2']
+    assert '阿耶尼' in rep['text'] and '3' in rep['text']
+    # 三连不能还落回「零散遇到」那批轻说法
+    mild = [t.format(n=3, name='阿耶尼') for t in TEMPLATES['repeat_commander']]
+    assert rep['text'].rstrip('。') not in mild
+
+
+def test_streak_templates_are_separate_from_mild():
+    """连击话术必须与「零散遇到」的轻说法分开，不能共用同一批句子。"""
+    assert TEMPLATES['repeat_commander_streak']
+    assert not set(TEMPLATES['repeat_commander_streak']) & set(TEMPLATES['repeat_commander'])
 
 
 def test_repeat_requires_three():

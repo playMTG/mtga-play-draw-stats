@@ -5,7 +5,7 @@
 1. 高场次（肝度）— n≥15 耐力局 / n≥10 打了很久
 2. 高胜率（大样本要 ≥80% 才值得压过场次）
 3. 罕见连续 / 明显先后手偏斜
-4. 重复主将（≥3；大场次要更极端）
+4. 重复主将（≥3；连续 N 把撞上同一个人时换成更重的说法，证据只挂那一段）
 5. 战绩兜底
 
 大场次（尤其 ≥15）时，普通三连、五五开胜率、中等偏斜都不当亮点。
@@ -74,6 +74,25 @@ def _filter_for_volume(candidates: list[dict], n: int, volume: str | None) -> li
                 continue
         kept.append(c)
     return kept
+
+
+def _longest_commander_run(rows: list[dict], gid: str) -> list[dict]:
+    """当天记录里连续遭遇同一主将的最长一段。
+
+    以当天的完整对局顺序为准（rows 已按 start_time, match_id 排好）：只有该主将
+    的对局算「撞上」，中间夹了别的对局就断。这与「一天里累计遇到 N 次」是两回事
+    ——「连续三把」比零散遇到三次更值得说重一点（用户反馈）。
+    """
+    best: list[dict] = []
+    current: list[dict] = []
+    for r in rows:
+        if gid in (r.get("commanders") or []):
+            current.append(r)
+            if len(current) > len(best):
+                best = list(current)
+        else:
+            current = []
+    return best
 
 
 def highlights(rows):
@@ -194,12 +213,25 @@ def highlights(rows):
         group = opponents[gid]
         if len(group) >= 3:
             name = names[gid]
-            add(
-                "repeat_commander",
-                pick("repeat_commander", [r["match_id"] for r in group] + [gid], name=name),
-                group,
-                len(identified) or n,
-            )
+            run = _longest_commander_run(rows, gid)
+            if len(run) >= 3:
+                # 连续三把都撞上同一个人：换更重的说法，证据也只挂这一段连着的。
+                add(
+                    "repeat_commander",
+                    pick("repeat_commander_streak",
+                         [r["match_id"] for r in run] + [gid], n=len(run), name=name),
+                    run,
+                    len(identified) or n,
+                    level="legendary",
+                    streak=len(run),
+                )
+            else:
+                add(
+                    "repeat_commander",
+                    pick("repeat_commander", [r["match_id"] for r in group] + [gid], name=name),
+                    group,
+                    len(identified) or n,
+                )
 
     def _rank(c):
         k = c["kind"]

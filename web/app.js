@@ -880,7 +880,11 @@ async function loadDaily() {
   }
   $("daily-events").innerHTML = r.events.map(e => `<p><strong>${eventMarkup(e.event, e.label)}</strong> · ${e.n} 场 · ${e.wins} 胜 ${e.losses} 负 · 先手 ${e.play} / 后手 ${e.draw} / 未知 ${e.unknown_pd}</p>`).join("")
     + (s.top_commanders.length ? `<p>常遇主将：${s.top_commanders.map(c => `${cardMarkup(c)} ${c.n} 场`).join("、")}</p>` : "")
-    + (r.modes || []).map(m => `<p>${esc(m.mode)}：${m.n} 场 · ${m.wins} 胜 ${m.losses} 负（整场胜负，首局先后手）</p>`).join("")
+    // 只有一个 BO 模式时，这行只是把当天总数原样复述一遍（用户反馈：这种情况显示 BO1 没意义）。
+    // 只有确实存在模式拆分（≥2 种）时才占一行。
+    + ((r.modes || []).length > 1
+        ? r.modes.map(m => `<p>${esc(m.mode)}：${m.n} 场 · ${m.wins} 胜 ${m.losses} 负（整场胜负，首局先后手）</p>`).join("")
+        : "")
     + (r.opponent_types?.total ? `<p>构筑对手类型资料：${r.opponent_types.known}/${r.opponent_types.total} 场。${Object.entries(r.opponent_types.rows).map(([k,v]) => `${esc(ARCH_ZH[k] || k)} ${v} 场`).join("、") || "尚无逐场标注，不推测对手构筑。"}</p>` : "");
   const history = r.history_summary;
   const historyItems = history?.items || [];

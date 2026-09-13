@@ -139,7 +139,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 
 <details style="margin:0 0 14px"><summary>赛事中文／原文对照与译名纠正</summary>
   <p class="ci">下列为当前赛制筛选内的赛事。中文为项目译名，未识别的活动保留原文。原始编号不同的赛事仍分别统计。</p>
-  <details><summary>如何纠正本地译名</summary><p>在插件目录的 data/event_names.zh.json 中填写原始编号和中文名称，保存后刷新页面即可。例如：</p><pre>{"Example_Event": "我的赛事译名"}</pre><p>本地译名优先于内置名称；删除对应条目即可恢复。仅影响显示。</p></details>
   <div id="event-name-list" style="max-height:280px;overflow:auto;overflow-wrap:anywhere"></div>
 </details>
 
@@ -230,14 +229,15 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </div>
 
 <div class="card" style="margin-top:14px" id="commander-card" data-page-node-id="kPjesv17VIdMGtagig7yNl">
+  <!-- 说明性文字不再放进页面（用户反馈：解释性的折叠三角「完全不是插件该有的东西」）。
+       卡名显示规则、主将类型来源、本地译名的纠正方法一律写在 docs/DESIGN.md；
+       页面上只保留「展开看数据」的折叠。 -->
   <div class="bar"><h2 style="margin:0" data-page-node-id="oByOOJZ5zo46YL3sshCjSe">对手主将档案 <span class="ci" id="cmdr-hint" data-page-node-id="aM4Cgbw82CmIRRXcPtDhHb"></span></h2>
     <button id="cmdr-sort-count" class="on">按场次</button><button id="cmdr-sort-recent">按最近遇到</button>
   </div>
-  <details style="margin-bottom:10px"><summary>卡名显示与译名纠正</summary><p>中文优先，缺译名时保留英文。展开主将名称可查英文、本地牌库版本、译名阶段和卡牌编号。双面、连体、历险和隔间牌只要一个名称命中即可；未命中的部分继续显示英文。</p><p>可在插件目录 data/card_names.zh.json 按卡牌编号设置本地译名，保存后刷新。例如：</p><pre>{"123": {"name_zh": "我的译名", "source": "我的备注"}}</pre><p>删除条目恢复本地牌库译名。不同卡牌编号不因显示名相同而合并；stage 5 以下的机器候选默认不导入。</p></details>
 <div class="wrap" data-page-node-id="JMWgzRk6yebjUSM5lSdSB9"><table id="t-cmdr" data-page-node-id="qv3beE3lTfdWLZDf4IkuXA"><thead data-page-node-id="xVXeZuRypbSb3SrQlnLm1R"><tr data-page-node-id="kE6Pdi5Cy5vB8vmYRkyduR">
     <th data-page-node-id="eTpo7jI3M4SzDTj3rdIGxE">主将</th><th data-page-node-id="aAo5dcQXo8P39Lq4FVYBtg">类型</th><th data-page-node-id="J3yjDSpR61GM1rTFHMf2iH">场次</th><th data-page-node-id="0h9lUHKTqDjkUqaDy0avbv">胜率</th><th data-page-node-id="B4hZzEkXAAdeIQa4Uq9ZOQ">先手</th><th data-page-node-id="p8AgpIqedK14PbjIKKumla">后手</th><th data-page-node-id="3wAbEEEi2sF7f9joFoiBme">打标</th>
   </tr></thead><tbody data-page-node-id="Vk00r5j8xQHLbUcY4N1XMx"></tbody></table></div>
-  <details class="detail-fold"><summary>主将类型来源</summary><div class="ci">手动打标优先于 commander_archetypes.json 先验；手动打标会沉淀为该主将的固定档案。</div></details>
 </div>
 
 <div class="card" style="margin-top:14px" id="opponent-types-card">
@@ -308,6 +308,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=0.4.2-deck-cascade"></script>
+<script src="app.js?v=0.4.3-quiet-ui"></script>
 </body>
 </html>

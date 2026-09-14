@@ -93,6 +93,8 @@ assert.match(observationMarkup, /连续 8 把后手/);
 assert.match(observationMarkup, /0\.39%/);
 assert.match(observationMarkup, /查看 8 场依据/);
 assert.match(observationMarkup, /deck-observation-open on/);
-assert.match(observationMarkup, /不是被针对概率/);
+// 概率口径原本挂在卡片里的一个折叠上，已按「页面上一个折叠都不留」删掉
+assert.doesNotMatch(observationMarkup, /<details/);
+assert.doesNotMatch(observationMarkup, /不是被针对概率/);
 
 console.log('Deck detail identity links, observations, summaries, versions and rows passed');

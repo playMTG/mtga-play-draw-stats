@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
 """当天事实评语：小样本也要敢说亮点；主句只留调侃，论据进 evidence。
 
-优先级：
-1. 高场次（肝度）— n≥15 耐力局 / n≥10 打了很久
-2. 高胜率（大样本要 ≥80% 才值得压过场次）
-3. 罕见连续 / 明显先后手偏斜
-4. 重复主将（≥3；连续 N 把撞上同一个人时换成更重的说法，证据只挂那一段）
-5. 战绩兜底
+优先级（**场次不是第一位**，2026-09-14 调整）：
+1. 高胜率（大样本要 ≥80% 才值得压过场次）
+2. 离谱级连续（legendary）
+3. 连续撞同一个主将
+4. 明显先后手偏斜
+5. 零散重复主将
+6. 普通连续段
+7. 高场次（肝度）— n≥15 耐力局 / n≥10 打了很久
 
-大场次（尤其 ≥15）时，普通三连、五五开胜率、中等偏斜都不当亮点。
+以前场次排第一，于是**打得越多评语越单调**：一场 22 局的日子若没有离谱级连续，
+其余信号都被 `_filter_for_volume` 丢掉，最后只剩一句「今天打了很久」（用户反馈：
+「一旦打长了就必然只有一条说今天打了很久」）。现在场次降到末位，只当背景板；
+它仍然会是**唯一**一条（如果确实没有别的可说的话），但不会再挤掉真亮点。
+
+大场次（尤其 ≥15）时，普通三连、五五开胜率、中等偏斜仍不当亮点。
 话术见 app/daily_copy.py。
 """
 from collections import defaultdict
@@ -51,7 +58,13 @@ def _score_pd_skew(known: list[dict]) -> str | None:
 
 
 def _filter_for_volume(candidates: list[dict], n: int, volume: str | None) -> list[dict]:
-    """大场次时丢掉「在 27 场里很平常」的弱信号。"""
+    """大场次时丢掉「在 27 场里很平常」的弱信号。
+
+    注意这里**只丢真的没信息量的**，不丢「一天里遇到同一个人 3 次」——
+    那是绝对计数够醒目，与当天打了多少场无关。以前用占比（n/denominator ≥ 0.45）
+    判，22 场里遇到 3 次（13.7%）就被丢掉，于是长时段的日子常常只剩一句场次
+    （用户反馈）。现在重复主将按**绝对次数**保留。
+    """
     if volume != "marathon":
         return candidates
     kept = []
@@ -62,16 +75,12 @@ def _filter_for_volume(candidates: list[dict], n: int, volume: str | None) -> li
             if c.get("level") != "legendary":
                 continue
         elif kind == "play_draw_streak":
-            # 仅离谱级（legendary）才压得过耐力局；3 连在 27 场里很常见
+            # 仅离谱级（legendary）才留；3 连在 27 场里很常见
             if c.get("level") != "legendary":
                 continue
         elif kind == "pd_skew":
             # 11 先 / 11 后之类的偏斜在长局里无信息量
             continue
-        elif kind == "repeat_commander":
-            denom = max(c.get("denominator") or n, 1)
-            if c.get("n", 0) < 8 and c.get("n", 0) / denom < 0.45:
-                continue
         kept.append(c)
     return kept
 
@@ -235,17 +244,18 @@ def highlights(rows):
 
     def _rank(c):
         k = c["kind"]
-        if k == "volume":
-            return 0
+        # 场次排最后：它是背景板，不该挤掉当天真正发生了什么
         if k == "hot_wr":
-            return 1
+            return 0
         if k == "play_draw_streak":
+            return 1 if c.get("level") == "legendary" else 5
+        if k == "repeat_commander":
             return 2 if c.get("level") == "legendary" else 4
         if k == "pd_skew":
             return 3
-        if k == "repeat_commander":
-            return 5
-        return 6
+        if k == "volume":
+            return 6
+        return 7
 
     # 只保留真正的亮点；不再补一句「这一天已记录 N 场，X 胜 Y 负」——
     # 那个数字在下方统计卡里已逐项列出，放进评语纯属复读（用户反馈）。

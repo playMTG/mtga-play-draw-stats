@@ -13,7 +13,8 @@ const fmtTime = (ms) =>
 
 // 只留仍在渲染的两张图。pdChart／eventChart 随 `396677b`「Drop redundant play/draw
 // and per-event charts」一起被删掉了调用点，留着变量只会让人以为还有那两张图。
-let trendChart = null, rankChart = null;
+// 只留段位曲线一张图。周胜率趋势图已按用户口径删掉（「罗列数据全都没必要」）。
+let rankChart = null;
 let rankTrack = "constructed";
 /** 筛选版本号：任何筛选变化递增；渲染前必须仍是当前版本（R11.4/H4）。 */
 let uiVersion = 0;
@@ -93,40 +94,6 @@ function bigCard(id, ciId, w) {
 // 先后手／各赛事柱状图与 `barChart` + 误差线插件 `ciPlugin` 一起删掉了调用点
 // （`396677b`「Drop redundant play/draw and per-event charts」），定义也一并清掉：
 // 留着的唯一效果是让人以为页面上还有那两张图。现在只有下面两条曲线。
-function trendChartDraw(rows) {
-  if (trendChart) trendChart.destroy();
-  trendChart = new Chart($("c-trend"), {
-    type: "line",
-    data: {
-      labels: rows.map((r) => r.key),
-      datasets: [
-        {
-          label: "周胜率 %",
-          data: rows.map((r) => r.wr),
-          borderColor: "#0969da",
-          backgroundColor: "rgba(9,105,218,.12)",
-          fill: true,
-          tension: 0.3,
-        },
-        {
-          label: "周场次",
-          data: rows.map((r) => r.n),
-          borderColor: "#d1a054",
-          yAxisID: "y1",
-          tension: 0.3,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      scales: {
-        y: { min: 0, max: 100, ticks: { callback: (v) => v + "%" } },
-        y1: { position: "right", grid: { drawOnChartArea: false } },
-      },
-    },
-  });
-}
-
 async function loadOverview() {
   const v = uiVersion;
   const o = await api("/api/overview");
@@ -161,9 +128,6 @@ async function loadOverview() {
     dist.innerHTML = `<span class="muted">无样本</span>`;
     $("pd-dist-txt").textContent = "";
   }
-
-  // 周趋势（先后手柱状图与上方指标卡重复，已移除；各赛事胜率信息量不足，已移除）
-  if ($("c-trend")) trendChartDraw(o.trend_weekly.slice(-12));
 }
 
 /* ---------- 首页入口：最近在打的套牌（V3 收尾） ---------- */
@@ -218,27 +182,19 @@ function mulliganView(m) {
   const rows = Object.fromEntries(m.by_mulligan.map(row => [row.key, row]));
   const clean = rows.clean || {n:0,wr:null}, mulligan = rows.mulligan || {n:0,wr:null};
   const unknown = rows.unknown?.n || 0, known = clean.n + mulligan.n, total = known + unknown;
-  if (!total) return {summary:"当前筛选没有可用的调度记录。", detail:"没有有胜负结果的对局可统计。"};
-  const coverage = `${known}/${total} 场（${(100 * known / total).toFixed(1)}%）`;
-  const rate = row => row.wr == null ? "胜率待确认" : `整场胜率 ${row.wr}%`;
-  const summary = known
-    ? `调度资料覆盖 ${coverage}。调度过 ${mulligan.n} 场，${rate(mulligan)}；已记录且未调度 ${clean.n} 场，${rate(clean)}。`
-    : `当前 ${total} 场对局均没有可用的调度记录。`;
-  const distTotal = m.kept_on_dist.reduce((sum, row) => sum + row.count, 0);
-  const dist = m.kept_on_dist.map(row => `调度 ${row.kept_on} 次后留牌 ${row.count} 局`).join(" · ") || "无逐局记录";
-  const detail = `有效分母：${total} 场有胜负结果的对局；调度已知 ${known} 场，未知 ${unknown} 场。`
-    + ` 逐局留牌分布共 ${distTotal} 局：${dist}。BO3 的胜率按整场结果统计，逐局留牌分布按游戏局统计；两者分母不能混用。`
-    + ` 调度资料来自客户端日志中的我方留牌事件，旧记录或来源缺少事件时保持未知。`;
-  return {summary, detail};
+  if (!total) return {summary: "当前筛选没有可用的调度记录。"};
+  const rate = row => row.wr == null ? "胜率待确认" : `胜率 ${row.wr}%`;
+  if (!known) return {summary: `当前 ${total} 场对局都没有可用的调度记录。`};
+  // 只留「调度过 vs 没调度」这一组对比。原先还带「资料覆盖 N/M 场（x%）」和一大段
+  // 逐局留牌分布／分母口径（用户反馈：这些数据全都没必要）。
+  return {summary: `调度过 ${mulligan.n} 场（${rate(mulligan)}），未调度 ${clean.n} 场（${rate(clean)}）。`};
 }
 
 async function loadMulligans() {
   const v = uiVersion;
   const m = await api("/api/mulligans");
   if (isStale(v)) return;
-  const view = mulliganView(m);
-  $("mull-box").innerHTML = `<p>${esc(view.summary)}</p>
-    <details class="detail-fold"><summary>查看逐次留牌分布、未知量与来源</summary><div class="ci">${esc(view.detail)}</div></details>`;
+  $("mull-box").innerHTML = `<p>${esc(mulliganView(m).summary)}</p>`;
 }
 
 const ARCH_ZH = { Aggro: "快攻", Control: "控制", Combo: "组合技", Ramp: "Ramp", Midrange: "中速", Other: "其他" };
@@ -346,7 +302,7 @@ async function loadCommanders() {
       (r) => {
         const delta = r.on_play.n && r.on_draw.n ? (r.on_play.wr - r.on_draw.wr) : null;
         return `<tr>
-        <td><details><summary>${cardMarkup(r)}</summary><div class="ci">${esc(r.name_en || "英文未记录")}<br>${esc(r.name_source)} · grpId:${esc(r.key)}${r.last_time ? `<br>最近相遇：${fmtTime(r.last_time)}` : ""}</div></details></td>
+        <td>${cardMarkup(r)}</td>
         <td>${archTag(r.archetype)}</td>
         <td class="num">${r.n}</td>
         <td class="num" style="color:${(r.wr ?? 0) >= 50 ? "var(--win)" : "var(--loss)"}">${r.wr ?? "–"}%</td>
@@ -553,7 +509,6 @@ function deckObservationMarkup(observations, selectedKey = "") {
     <div class="deck-observation-actions">
       <button class="ti-btn deck-observation-open${item.key === selectedKey ? " on" : ""}" data-observation="${esc(item.key)}">查看 ${item.n} 场依据</button>
     </div>
-    ${item.probability ? `<details><summary>为什么这段连续记录值得突出</summary><p>${esc(item.probability.explanation)}</p></details>` : ""}
   </article>`).join("");
 }
 
@@ -764,33 +719,6 @@ function openDeck(anchor) {
   }
 }
 
-function dailyQualityView(summary, report) {
-  if (!summary.n && !report.unknown_date) {
-    return {hidden:true, summary:"资料说明", detail:""};
-  }
-  const issues = [];
-  const deckMissing = Math.max(0, summary.n - summary.deck_known);
-  const commanderMissing = Math.max(0, summary.commander_eligible - summary.commander_known);
-  if (deckMissing) issues.push(`${deckMissing} 场套牌未记录`);
-  if (commanderMissing) issues.push(`${commanderMissing} 场争锋主将未记录`);
-  if (report.unknown_date) issues.push(`${report.unknown_date} 场日期未知`);
-  const parts = [
-    `调度 ${summary.mulligan_known}/${summary.n} 场`,
-    `套牌 ${summary.deck_known}/${summary.n} 场`,
-  ];
-  if (summary.commander_eligible) {
-    parts.push(`争锋对手主将 ${summary.commander_known}/${summary.commander_eligible} 场`);
-  }
-  let detail = `当前日期有效分母：${summary.n} 场；${parts.join("；")}。`;
-  if (report.unknown_date) detail += ` 另有 ${report.unknown_date} 场日期未知，未分配到具体日期。`;
-  detail += " 缺失资料只影响对应维度，不把未知当作零。";
-  return {
-    hidden:false,
-    summary:issues.length ? `资料说明：${issues.join(" · ")}` : "资料覆盖说明",
-    detail,
-  };
-}
-
 let dailyRequest = 0, dailyScope = "", dailyLatest = null;
 async function loadDaily() {
   // 「全部日期」下战报无意义（战报是单日口径）：藏起战报区，只留下方明细
@@ -806,16 +734,11 @@ async function loadDaily() {
   const request = ++dailyRequest;
   const scope = `${params()}|${matchDay}`;
   if (dailyScope !== scope) {
-    $("daily-evidence").hidden = true;
-    $("daily-evidence").open = false;
     $("daily-latest").hidden = true;
     $("daily-plain").textContent = "正在读取本地战报…";
     $("daily-plain").className = "";
-    for (const id of ["daily-summary", "daily-events", "daily-quality", "daily-asof", "daily-pd-streaks", "daily-history-lead", "daily-history-items", "daily-history-note"]) $(id).textContent = "";
+    for (const id of ["daily-summary", "daily-asof", "daily-pd-streaks", "daily-history-lead"]) $(id).textContent = "";
     $("daily-history-section").hidden = true;
-    $("daily-history-details").open = false;
-    $("daily-quality-details").hidden = true;
-    $("daily-quality-details").open = false;
   }
   dailyScope = scope;
   const extra = { day: matchDay };
@@ -825,9 +748,7 @@ async function loadDaily() {
     if (request === dailyRequest && scope === `${params()}|${matchDay}`) {
       $("daily-plain").textContent = "战报读取失败，请重试。";
       $("daily-plain").className = "";
-      $("daily-evidence").hidden = true;
       $("daily-latest").hidden = true;
-      $("daily-quality-details").hidden = true;
     }
     return;
   }
@@ -839,14 +760,6 @@ async function loadDaily() {
   dailyScope = `${params()}|${r.date}`;
   dailyLatest = r.latest_date;
   $("daily-latest").hidden = s.n > 0 || !dailyLatest;
-  $("daily-evidence").hidden = !(r.highlights || []).length;
-  $("daily-evidence-body").innerHTML = (r.highlights || []).map(f => {
-    const ids = new Set(f.match_ids);
-    const rows = (r.highlight_records || []).filter(x => ids.has(x.match_id));
-    return `<p><strong>${esc(f.text)}</strong></p><p class="ci">${esc(r.date)} · 当前筛选 · 相关记录 ${f.n} 场／所述范围 ${f.denominator} 场；先后手为首局口径。</p>`
-      + (f.probability ? `<details><summary>展开概率口径</summary><p class="ci">${esc(f.probability.explanation)}</p></details>` : "")
-      + rows.map(x => `<p>${fmtTime(x.start_time)} · ${esc(x.my_deck_tag || "套牌未记录")} · ${eventMarkup(x.event_id, x.event_label)} · ${{play:"先手",draw:"后手"}[x.play_draw] || "先后手未记录"} · ${{win:"胜",loss:"负"}[x.my_result] || "结果待确认"}${x.commander_names.length ? ` · ${cardsMarkup(x.commander_cards, x.commander_names)}` : ""}</p>`).join("");
-  }).join("");
   $("daily-asof").textContent = r.is_today ? "截至目前的已记录对局" : "历史日战报";
   $("daily-plain").textContent = r.plain || "";
   $("daily-plain").hidden = !r.plain;  // 有对局但无亮点时后端给空串，不留空段落
@@ -860,38 +773,26 @@ async function loadDaily() {
   $("daily-summary").innerHTML = `<div class="card"><h2>当天胜率</h2><div class="big">${s.win_rate.wr ?? "–"}%</div><div class="ci">${s.wins} 胜 ${s.losses} 负 · ${s.win_rate.n} 场有胜负</div></div>
     <div class="card"><h2>当天先手率</h2><div class="big">${pd?.day.play_rate ?? "–"}%</div><div class="ci">先手 ${s.play} 场 · 后手 ${s.draw} 场</div></div>
     <div class="card"><h2>当天后手率</h2><div class="big">${pd?.day.draw_rate ?? "–"}%</div><div class="ci">${s.play_rate.n} 场先后手已知 · 未知 ${s.unknown_pd} 场</div></div>`;
+  // 这里原来有三行「当天最长 / 截至所选日期的当前连续 / 历史最长」加一句统计口径，
+  // 再加一段「赛事 · N 场 · X 胜 Y 负 · 先手 a / 后手 b / 未知 c」的逐赛事罗列、
+  // 常遇主将、BO 模式拆分、对手类型覆盖率（用户反馈：这些数据全都没必要）。
+  // 现在只留**当前连续**这一条——它是这个面板存在的理由（先后手），其余在明细里。
   if (pd) {
-    const d = pd.day_streaks, h = pd.history_streaks;
-    const current = h.current_side ? `连续${h.current_side === "play" ? "先手" : "后手"} ${h.current_n} 场` : (h.reason || "无记录");
-    // 「当天最长」在空日同样只会是 0/0；「截至所选日期」那两行跨日累计，空日仍有意义，保留。
-    $("daily-pd-streaks").innerHTML = (s.n ? `<p><strong>当天最长</strong>：连续先手 ${d.longest_play ?? "–"} 场 · 连续后手 ${d.longest_draw ?? "–"} 场</p>` : "")
-      + `<p><strong>截至所选日期的当前连续</strong>：${esc(current)}${h.last_time ? ` · 末场 ${fmtTime(h.last_time)}` : ""}</p>
-      <p class="ci">截至所选日期的历史最长：先手 ${h.longest_play ?? "–"} 场 · 后手 ${h.longest_draw ?? "–"} 场。当前筛选内、按比赛首局统计；未知先后手或同时间记录打断连续段。${h.reason && h.longest_play == null ? esc(h.reason)+"。" : ""}</p>`;
+    const h = pd.history_streaks;
+    const current = h.current_side
+      ? `当前连续${h.current_side === "play" ? "先手" : "后手"} ${h.current_n} 场`
+      : (h.reason || "无连续记录");
+    $("daily-pd-streaks").textContent = current;
   }
-  $("daily-events").innerHTML = r.events.map(e => `<p><strong>${eventMarkup(e.event, e.label)}</strong> · ${e.n} 场 · ${e.wins} 胜 ${e.losses} 负 · 先手 ${e.play} / 后手 ${e.draw} / 未知 ${e.unknown_pd}</p>`).join("")
-    + (s.top_commanders.length ? `<p>常遇主将：${s.top_commanders.map(c => `${cardMarkup(c)} ${c.n} 场`).join("、")}</p>` : "")
-    // 只有一个 BO 模式时，这行只是把当天总数原样复述一遍（用户反馈：这种情况显示 BO1 没意义）。
-    // 只有确实存在模式拆分（≥2 种）时才占一行。
-    + ((r.modes || []).length > 1
-        ? r.modes.map(m => `<p>${esc(m.mode)}：${m.n} 场 · ${m.wins} 胜 ${m.losses} 负（整场胜负，首局先后手）</p>`).join("")
-        : "")
-    + (r.opponent_types?.total ? `<p>构筑对手类型资料：${r.opponent_types.known}/${r.opponent_types.total} 场。${Object.entries(r.opponent_types.rows).map(([k,v]) => `${esc(ARCH_ZH[k] || k)} ${v} 场`).join("、") || "尚无逐场标注，不推测对手构筑。"}</p>` : "");
   const history = r.history_summary;
   const historyItems = history?.items || [];
   const hasBaseline = historyItems.some(i => i.delta_pp != null);
-  // 无基线不展示空对比（VISION V0）
+  // 无基线不展示空对比（VISION V0）。只留 headline 那一句结论——
+  // 逐赛事的明细与比较口径原本挂在折叠里，现在整块去掉（用户反馈）。
   $("daily-history-section").hidden = !hasBaseline;
   if (hasBaseline) {
     $("daily-history-lead").innerHTML = `<p><strong>${esc(history.headline)}</strong></p>`;
-    $("daily-history-items").innerHTML = historyItems
-      .filter(i => i.delta_pp != null)
-      .map(item => `<p>${esc(item.text)}${item.small_sample ? " <span class=\"ci\">当天样本较少，仅描述。</span>" : ""}</p>`).join("");
-    $("daily-history-note").textContent = history.note;
   }
-  const quality = dailyQualityView(s, r);
-  $("daily-quality-details").hidden = quality.hidden;
-  $("daily-quality-summary").textContent = quality.summary;
-  $("daily-quality").textContent = quality.detail;
 }
 
 function fillSelect(sel, list) {
@@ -916,7 +817,6 @@ async function loadFilters() {
   fillSelect("f-family", f.families || []);
   fillSelect("f-event", f.events);
   fillSelect("f-mode", f.modes || []);
-  $("event-name-list").innerHTML = f.events.map(e => `<p>${esc(e.label)}<br><code>${esc(e.value)}</code></p>`).join("") || "当前范围无赛事";
   fillSelect("f-deck", f.decks);
   deckIdCounts = new Map((f.decks || []).map(d => [d.value, d.ids || 1]));
   await syncDeckIdentities();
@@ -1112,13 +1012,6 @@ function reportLoadFailures(failed, fatal = false) {
 // ---------- 你被针对了吗（§3.5） ----------
 let tiWindow = "30";
 
-function dimBar(d) {
-  return `<div class="dim"><div class="dim-head"><strong>${esc(d.label)}</strong>
-    <span class="tag">${esc(d.verdict || "仅记录／资料不足")}</span>
-    ${d.enough ? `<span class="ci">p=${Number(d.p).toPrecision(3)} · ${d.n} 场</span>` : ""}</div>
-    <div class="dim-plain">${esc(d.plain)}</div></div>`;
-}
-
 function targetingSummaryItems(r) {
   const s = r.summary;
   const known = s.play + s.draw;
@@ -1158,19 +1051,9 @@ async function loadTargeting() {
   const v = uiVersion;
   const r = await api("/api/targeting", { window: tiWindow });
   if (isStale(v)) return;
+  // 只留一两句摘要。原先这里还有个折叠，里面列四个维度的 p 值／分母、
+  // 同范围历史战绩、近期低胜率对手清单和免责声明——整块按用户口径删掉。
   $("ti-summary").innerHTML = targetingSummaryMarkup(r);
-  const visibleDimensions = Object.entries(r.dimensions).filter(([key]) => key !== "matchup" || r.summary.commander_eligible > 0);
-  $("ti-details-summary").textContent = `查看详细分布、资料覆盖与统计口径（${visibleDimensions.length} 项）`;
-  $("ti-dims").innerHTML = visibleDimensions.map(([,value]) => dimBar(value)).join("")
-    + (r.comparison ? `<p>同范围历史战绩：可比 ${r.comparison.covered}/${r.comparison.total_decided} 场${r.comparison.adjusted_delta_pp == null ? "；暂无足够基线。" : `；较按当前构成加权的此前胜率相差 ${r.comparison.adjusted_delta_pp} 个百分点。`}</p>` : "");
-  const nem = $("ti-nemeses");
-  if (r.nemeses && r.nemeses.length) {
-    nem.textContent = "近期低胜率对手（小样本记录）：" + r.nemeses.map(
-      (x) => `${x.name}（${x.archetype} ${x.n} 场 ${x.wr}%）`).join("、");
-  } else {
-    nem.textContent = "";
-  }
-  $("ti-note").textContent = r.disclaimer;
 }
 
 // 四级级联：赛制大类 → 赛事 → 比赛模式 → 套牌

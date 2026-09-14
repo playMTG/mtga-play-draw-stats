@@ -119,6 +119,12 @@ R10 已分成：BO 模式统一筛选与逐局入口、构筑对手类型的手�
 ## 交接记录
 
 - 当前进度：R1—R10.3、R11.1—R11.6、R12.1—R12.5、R13.1—R13.4 全部完成。下一版方向从 [VISION.md](VISION.md) 重新排优先级，不在本路线图中自动追加编号。**VISION 的剩余项已在 2026-09-13 清空**（轮抓筛选拆分、赛事译名核验、V3 收尾三项均已完成）。
+- 全站信息减负（用户看过实际页面后的三条反馈，不占新的 R 编号，2026-09-14）：
+  - **折叠从「只留数据类」推到「一个都不留」**：`index.html` 里现在没有任何 `<details>`。删掉的 9 处：赛事中文／原文对照、查看评语依据、查看全部赛事·BO 模式与比较口径、资料说明、查看详细分布·资料覆盖与统计口径（4 项）、构筑版本变更、逐次留牌分布、主将名详情、概率口径 ×2。唯一例外是 `app.js` 动态生成的**对手类型打标控件**（输入控件，R10.2 的多标签标注）。守卫从「逐个列禁止标题」改成「出现 `<details>` 就报错」。
+  - **删掉的罗列区块**：连续纪录三行 → 只留「当前连续」一行；`#daily-events` 整块（逐赛事罗列 + 常遇主将 + BO 模式拆分 + 对手类型覆盖率）；周胜率趋势双序列图；调度卡的「资料覆盖 N/M 场（x%）」压成一句对比；总览卡的「另有 N 场未计入（Bot 局…）」。
+  - **Bot 局一律排除**：删 `#f-bot` 开关，请求恒带 `exclude_bot=true`；后端保留该参数（导出 CSV 与测试要用）。
+  - **评语**：① 话术往「有情绪、有画面」重写（不编事实、不用纯感叹词凑数）；② **场次从优先级第 1 位降到末位**，并让 `_filter_for_volume` 按**绝对次数**而非占比保留重复主将——修掉「一旦打长了就必然只剩一条说今天打了很久」。真实库 2026-09-14（22 场）从「22 场打满。」变成「又和 拿卡地贱民阿耶尼 碰上了，这缘分不浅。 22 场连轴转，牌桌都快坐穿了。」
+  - 验收：`pytest tests/ -q` → **277 passed**；`node --check web/app.js`；`tools/check_privacy.py --all` 扫 109 文件通过。空转验证：`_rank` 里 `volume` 改回返回 0 → 两条新测试同时失败。浏览器实测：页面 `<details>` 只剩明细里的打标控件、`#c-trend` 与 `#event-name-list` 不存在、控制台 0 错误。缓存参数 → `0.5.3-quiet-page`。详见 [DESIGN.md](DESIGN.md)「收尾 2026-09-14 全站信息减负」。
 - 前端死代码清理（顺着 V3 收尾那个「恒为真的判断」找同类问题，不占新的 R 编号）：
   - **判据**：「定义了但 `app.js` 内部没人引用」。浏览器只加载 `app.js`，`index.html` 也没有内联事件处理器（全走 `addEventListener`），所以**只被 `.cjs` 测试引用的函数同样是死代码**。
   - **清掉三个**：`barChart` + 误差线插件 `ciPlugin`（含 `Chart.register(ciPlugin)`）与 `matchDetails` 的调用点都在 `396677b`（「Drop redundant play/draw and per-event charts」「BO1 rows no longer expand a long details panel」）被删；`dimVerdictColor` 在 `66be77d`（targeting 改朴素措辞）被删。连带死掉的还有 `fmtDur`（只被 `matchDetails` 用）与顶层变量 `pdChart`／`eventChart`。`index.html` 里只有 `#c-trend`／`#c-rank` 两个 canvas，没有孤儿 DOM。

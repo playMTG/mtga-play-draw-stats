@@ -9,7 +9,7 @@ def row(i, pd='play', result='win', commander=None, event='Play_Brawl_Historic')
 
 
 def test_marathon_day_beats_ordinary_streak():
-    """27 场：亮点是场次，不是三连先手或五五开胜率。"""
+    """27 场：只有场次够格，三连先手与五五开胜率都不算亮点。"""
     rows = []
     for i in range(27):
         # 14 胜 13 负 ≈ 51.9%，先后手交错，中间夹一段 3 先手
@@ -19,19 +19,45 @@ def test_marathon_day_beats_ordinary_streak():
     facts = highlights(rows)
     kinds = [f['kind'] for f in facts]
     assert 'volume' in kinds
-    assert facts[0]['kind'] == 'volume'
     text = ' '.join(f['text'] for f in facts)
     assert '27' in text
     assert '3 连' not in text and '三连' not in text
 
 
-def test_marathon_with_legendary_streak_keeps_both():
+def test_volume_never_leads_when_a_real_signal_exists():
+    """场次是背景板，不能排在真亮点前面（2026-09-14 用户反馈）。
+
+    以前场次排第一，于是打得越多评语越单调——22 局的日子若没有离谱级连续，
+    其余信号全被丢掉，最后只剩一句「今天打了很久」。
+    """
     rows = [row(i, pd='draw', result='win') for i in range(20)]
     facts = highlights(rows)
-    kinds = {f['kind'] for f in facts}
-    assert 'volume' in kinds
-    # 20 连后手会 legendary，可与耐力局并列
-    assert 'play_draw_streak' in kinds or 'hot_wr' in kinds
+    assert facts, '20 场全胜全后手必须有话可说'
+    assert facts[0]['kind'] != 'volume', [f['kind'] for f in facts]
+    # 两个真亮点足够占满名额时，场次可以被挤掉——它不该抢真事实的位置
+    assert {'hot_wr', 'play_draw_streak'} <= {f['kind'] for f in facts}
+
+
+def test_long_day_with_only_scattered_repeat_still_gets_two_lines():
+    """用户原场景：22 场、没有离谱级连续，但一天里遇到同一个人 3 次。
+
+    旧实现按占比（3/22 = 13.7% < 45%）把这个信号丢掉，于是整天只剩
+    「22 场打满」一条。现在重复主将按**绝对次数**保留，评语变成两条，
+    且真事实在前、场次在后。
+    """
+    rows = []
+    for i in range(22):
+        cmd = '阿耶尼' if i in (3, 9, 16) else f'对手{i}'
+        pd = 'play' if i % 3 else 'draw'
+        result = 'win' if i % 2 else 'loss'   # 11 胜 11 负，够不到高胜率
+        rows.append(row(i, pd=pd, result=result, commander=cmd))
+    facts = highlights(rows)
+    kinds = [f['kind'] for f in facts]
+    assert len(facts) == 2, kinds
+    assert kinds[0] == 'repeat_commander', kinds
+    assert kinds[1] == 'volume', kinds
+    assert '阿耶尼' in facts[0]['text']
+    assert '22' in facts[1]['text']
 
 
 def test_empty_and_single_unknown_keeps_fallback():

@@ -66,28 +66,30 @@ def test_hidden_attribute_rule_beats_display_classes():
     )
 
 
-# 用户反馈：「解释性的三角符号太多了，完全不是插件该有的东西」。
-# 页面上只保留「展开看数据」的折叠（赛事对照表、评语依据、覆盖率、构筑版本变更…），
-# 纯说明文字一律写进 docs/DESIGN.md。这几个标题就是当时删掉的那批，别再搬回来。
-_EXPLANATORY_SUMMARIES = (
-    "卡名显示与译名纠正",
-    "主将类型来源",
-    "如何纠正本地译名",
-)
+# 用户口径演进：先是「解释性的三角符号太多」→ 只保留「展开看数据」的折叠；
+# 2026-09-14 看过实际页面后进一步明确「这些能点开的三角完全没必要」。
+# 所以现在页面上一个折叠都不留，想看细节去对局明细或导出 CSV。
+def test_no_folds_in_page():
+    """`index.html` 里不应再有任何 `<details>` 折叠。
 
-
-def test_no_explanatory_folds_in_page():
-    """页面上不应再有「只讲道理、不给数据」的折叠入口。"""
+    比逐个列标题更结实：只要出现折叠就报错，不用维护「哪些标题算说明性」。
+    唯一允许保留的 `<details>` 是 `app.js` 动态生成的对手类型打标控件
+    （`arch-edit`）——它是输入控件、不在页面初始 DOM 里，也不是「点开看数据」。
+    """
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    # 先剥 HTML 注释：注释里若举了 `<summary>…</summary>` 的例子就会被当成真入口。
-    # （当前注释里没有这种例子，实测剥不剥都一样；这一步是防以后加例子。）
+    # 先剥 HTML 注释：注释里若举了 `<details>` 的例子就会被当成真折叠。
     body = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
-    summaries = re.findall(r"<summary[^>]*>(.*?)</summary>", body, flags=re.DOTALL)
-    assert summaries, "没解析出任何 <summary>，正则可能失效了"
-    leftover = [s for s in _EXPLANATORY_SUMMARIES if any(s in text for text in summaries)]
-    assert not leftover, (
-        "index.html 里又出现了纯说明性的折叠入口（说明应写进 docs/DESIGN.md）：\n  "
-        + "\n  ".join(leftover)
+    folds = re.findall(r"<details[\s>]", body, flags=re.IGNORECASE)
+    assert not folds, (
+        f"index.html 里又出现了折叠（<details> × {len(folds)}）："
+        "页面口径是一个折叠都不留，说明写 docs/DESIGN.md、细节看对局明细"
+    )
+
+    js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    js_folds = re.findall(r"<details[^>]*class=\"([^\"]*)\"", js)
+    assert js_folds == ["arch-edit"], (
+        "app.js 里动态生成的折叠只允许保留对手类型打标控件（arch-edit），"
+        f"实际是：{js_folds}"
     )
 
 

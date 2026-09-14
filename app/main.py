@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import FileResponse, Response
 
-from . import store, stats
+from . import logsetup, store, stats
 from .config import Config, load_config
 from .events import SessionBuilder
 from .watcher import LogWatcher
@@ -140,6 +140,9 @@ def _watch_loop() -> None:
     except Exception as exc:
         _state["watching"] = False
         _state["last_error"] = f"watch_died:{type(exc).__name__}"
+        # 线程死了主进程不会退，面板看着还在——必须留痕，否则只能看到
+        # 「开着但不再记对局」这种无解现象
+        logsetup.logger().critical("监听线程终止", exc_info=True)
     finally:
         _state["watching"] = False
 
@@ -169,6 +172,7 @@ def _watch_loop_inner() -> None:
     pending_matches: list = []
     pending_ranks: list = []
     last_detect_attempt = 0.0
+    last_beat = 0.0
     _state["watching"] = True
 
     def save_marks() -> None:
@@ -246,6 +250,13 @@ def _watch_loop_inner() -> None:
                     got += 1
             except OSError:
                 continue  # 文件暂时不可读（滚动中），下轮重试
+            except Exception as exc:
+                # 以前这里只 catch OSError：别的异常会直接终结这个 daemon 线程，
+                # 面板看着还在、接口也正常，但从此不再记录任何对局——静默停摆。
+                logsetup.logger().warning(
+                    "监听循环异常，跳过本轮：%s: %s", type(exc).__name__, exc,
+                    exc_info=True)
+                continue
         if got or pending_matches or pending_ranks:
             _state["last_events"] = _state.get("last_events", 0) + got
             try:
@@ -260,6 +271,14 @@ def _watch_loop_inner() -> None:
                 except sqlite3.Error:
                     pass
                 _state["last_error"] = type(exc).__name__
+                logsetup.logger().warning("入库失败：%s", type(exc).__name__,
+                                          exc_info=True)
+        # 每 5 分钟留一行「还活着」：崩溃后靠它定位最后存活时间
+        if time.time() - last_beat >= 300:
+            last_beat = time.time()
+            logsetup.heartbeat(
+                f"events={_state.get('last_events', 0)} "
+                f"last_success={_state.get('last_success_at')}")
         _stop_event.wait(2)
 
 
@@ -395,6 +414,8 @@ def _boot_tasks() -> None:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    # 也在这里配一次：直接 `uvicorn app.main:app` 起时不会走 main()
+    logsetup.setup(cfg.root, cfg.port)
     if getattr(cfg, "config_error", None):
         _state["config_error"] = cfg.config_error
     # 先让 HTTP 服务立即可用，重活交给后台线程
@@ -872,7 +893,13 @@ def chart_js():
 def main() -> None:
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=cfg.port, log_level="warning")
+    log = logsetup.setup(cfg.root, cfg.port)
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=cfg.port, log_level="warning")
+    except BaseException:
+        # 起不来（端口被占、依赖缺失…）要留下完整栈，否则又是一次「闪退无痕」
+        log.critical("面板退出", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":

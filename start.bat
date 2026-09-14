@@ -35,14 +35,17 @@ curl -s -o nul %URL%/api/status && (
 )
 
 rem 后台最小化启动服务，等就绪后自动打开浏览器
+rem 异常退出时保留窗口（`|| pause`）：以前窗口一闪就没，事后查不到任何原因。
+rem 完整运行日志（含未捕获异常的 traceback）在 data\panel.log——
+rem 正常退出会写一行 `exit: clean`，日志尾部没有这行就说明是被强杀或崩溃。
 echo 正在启动面板服务...
-start "MTGA Panel" /min "%PY%" -m app.main
+start "MTGA Panel" /min cmd /c ""%PY%" -m app.main || pause"
 rem 等候上限放宽到 90 秒：历史日志累积较多时，启动后的回填需要更久
 for /l %%i in (1,1,90) do (
   curl -s -o nul %URL%/api/status && goto :open
   timeout /t 1 /nobreak >nul
 )
-echo 90 秒内服务仍未就绪，请查看 data 目录下的日志
+echo 90 秒内服务仍未就绪，请查看 data 目录下的 panel.log
 pause
 exit /b 1
 
@@ -50,4 +53,5 @@ exit /b 1
 start "" %URL%
 echo 已在浏览器打开面板（http://127.0.0.1:8765）
 echo 停止服务：双击 stop.bat，或关闭最小化的 "MTGA Panel" 窗口
+echo 运行日志：data\panel.log（面板突然消失时先看它）
 timeout /t 5 >nul

@@ -11,7 +11,7 @@ const source = fs.readFileSync('web/app.js', 'utf8');
 const makeEl = (init = {}) => Object.assign(
   { value: '', innerHTML: '', hidden: false, classList: { contains: () => false } }, init);
 const els = {
-  'f-bot': makeEl(), 'f-family': makeEl(), 'f-event': makeEl(), 'f-mode': makeEl(),
+  'f-family': makeEl(), 'f-event': makeEl(), 'f-mode': makeEl(),
   'f-deck': makeEl(), 'f-deck-id': makeEl(), 'f-deck-id-wrap': makeEl({ hidden: true }),
 };
 const $ = (id) => els[id];

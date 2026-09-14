@@ -22,7 +22,9 @@ function isStale(v) { return v !== uiVersion; }
 
 function params() {
   const p = new URLSearchParams();
-  p.set("exclude_bot", $("f-bot").classList.contains("on"));
+  // Bot 局一律排除，不给开关：面板是给自己复盘用的，和 Bot 打的牌没有参考价值，
+  // 摆在筛选栏里只会多一个没人会关的按钮（用户口径）。
+  p.set("exclude_bot", "true");
   const f = $("f-family").value, e = $("f-event").value, m = $("f-mode").value, d = $("f-deck").value;
   if (f) p.set("family", f);
   if (e) p.set("event", e);
@@ -136,10 +138,6 @@ async function loadOverview() {
   $("k-draw-rate-note").textContent = "全史 · 当前筛选 · 比例仅含先后手已知的有结果对局";
   applyFormatFocus(o.format_focus);
   bigCard("k-total", "k-total-ci", o.total);
-  if (o.hidden) {
-    $("k-total-ci").textContent +=
-      ` · 另有 ${o.hidden} 场未计入（Bot 局，见下方对局列表）`;
-  }
   $("k-play-ci").textContent = o.on_play.n
     ? `先手胜率 ${o.on_play.wr}% · 95% CI ${o.on_play.lo}–${o.on_play.hi} · ${o.on_play.wins}胜/${o.on_play.n}场`
     : "";
@@ -643,7 +641,7 @@ async function loadDeckDetail() {
     }
     const p = new URLSearchParams({
       scope: deckScope,
-      exclude_bot: String(!!$("f-bot")?.classList?.contains?.("on")),
+      exclude_bot: "true",
     });
     for (const key of ["deck", "deck_id", "deck_version"]) {
       if (deckAnchor[key]) p.set(key, deckAnchor[key]);
@@ -1196,10 +1194,6 @@ $("f-deck").addEventListener("change", async () => {
 });
 $("f-deck-id").addEventListener("change", () => {
   matchOffset=0;bumpUiVersion();reload();
-});
-$("f-bot").addEventListener("click", async () => {
-  $("f-bot").classList.toggle("on");
-  await onFilterChange();
 });
 
 // 被针对指数时间窗切换

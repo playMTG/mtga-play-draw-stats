@@ -22,12 +22,22 @@ const LOADERS = [
   ['loadDaily', '每日战报'],
 ];
 
-const context = vm.createContext({ $, esc: String });
+const context = vm.createContext({ $, esc: String, renderCardNamesNote: () => {} });
 for (const [fn, label] of LOADERS) context[fn] = stub(label);
 // 只取 RELOAD_SECTIONS + reload + reportLoadFailures 这一段；各 loader 用桩注入
 vm.runInContext(
   source.slice(source.indexOf('const RELOAD_SECTIONS'), source.indexOf('// ---------- 你被针对了吗')),
   context);
+
+// loadStatus 单独切片：它要展示启动期失败（R11.3「回填错误可见可重试」的前端半边，
+// 2026-09-14 补——在此之前 /api/retry_boot 与 boot_error 前端从没引用过）。
+{
+  const start = source.indexOf('async function loadStatus');
+  const end = source.indexOf('function renderCardNamesNote');
+  assert.ok(start > 0, '切片起点未找到：async function loadStatus');
+  assert.ok(end > start, '切片终点未找到：function renderCardNamesNote');
+  vm.runInContext(source.slice(start, end), context);
+}
 
 (async () => {
   // 1) 全部成功：不显示错误区
@@ -60,5 +70,31 @@ vm.runInContext(
   assert.equal($('load-error').hidden, true, '恢复后应收起错误区');
   assert.equal($('load-error-body').innerHTML, '');
 
-  console.log('Load-error UI: 区块独立容错、点名失败区块、致命态标题 检查通过');
+  // 5) 启动期（归档／回填）失败必须在页面上可见，并给出重试入口。
+  //    在此之前 /api/retry_boot 与 _state["boot_error"] 只有后端半边，
+  //    前端从没引用过——回填失败时用户什么都看不到。
+  const status = (boot_error) => ({
+    watching: true, last_error: null, boot_error,
+    db: {matches: 10986}, card_names: {},
+  });
+  let statusReply = status(null);
+  context.api = async () => statusReply;
+
+  await context.loadStatus();
+  assert.equal($('boot-retry').hidden, true, '没失败时不该出现重试按钮');
+  assert.doesNotMatch($('watch-txt').textContent, /启动任务失败/);
+
+  statusReply = status('backfill:OperationalError:disk I/O error');
+  await context.loadStatus();
+  assert.equal($('boot-retry').hidden, false, '启动失败时必须给出重试入口');
+  assert.match($('watch-txt').textContent, /启动任务失败/);
+  assert.match($('watch-txt').textContent, /backfill:OperationalError/);
+
+  // 恢复后按钮要收起来（状态不能残留）
+  statusReply = status(null);
+  await context.loadStatus();
+  assert.equal($('boot-retry').hidden, true);
+  assert.doesNotMatch($('watch-txt').textContent, /启动任务失败/);
+
+  console.log('Load-error UI: 区块独立容错、点名失败区块、致命态标题、启动失败可见可重试 检查通过');
 })();

@@ -28,7 +28,6 @@ button:disabled{cursor:not-allowed;opacity:.5}
 .link-button{padding:0;border:0;background:transparent;color:var(--accent);text-align:left;text-decoration:underline;text-decoration-color:transparent}
 .link-button:hover,.link-button:focus{text-decoration-color:currentColor}
 .grid{display:grid;gap:14px}
-.g2{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
 .g3{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
 .big{font-size:28px;font-weight:700}
@@ -37,8 +36,7 @@ button:disabled{cursor:not-allowed;opacity:.5}
 .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:var(--chip);color:var(--muted)}
 .tag.win{background:#fbe9e7;color:var(--win)}
 .tag.loss{background:#e6f4ee;color:var(--loss)}
-.tag.abn{background:#fff4d6;color:var(--warn)}
-.arch-edit summary{cursor:pointer;font-size:11px;color:var(--muted);list-style:none}
+.tag.arch-edit summary{cursor:pointer;font-size:11px;color:var(--muted);list-style:none}
 .arch-edit summary::-webkit-details-marker{display:none}
 .arch-edit summary::before{content:"+ ";color:var(--accent)}
 .arch-edit[open] summary::before{content:"− "}
@@ -55,8 +53,6 @@ tbody tr:hover{background:#f0f4fa}
 .num{text-align:right;font-variant-numeric:tabular-nums}
 .wrap{overflow:auto;max-height:420px;border:1px solid var(--border);border-radius:8px}
 .clip{max-width:180px;overflow:hidden;text-overflow:ellipsis}
-.game-list{display:grid;gap:5px;min-width:250px;margin-top:6px}
-.game-row{padding:5px 7px;border-radius:5px;background:#f6f8fa;white-space:normal}
 .status{font-size:12px;color:var(--muted);margin-left:auto}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bbb;margin-right:4px}
 .dot.ok{background:#1a7f5a}
@@ -119,7 +115,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <button id="open-filter-deck" disabled>查看套牌详情</button>
   <button id="btn-export-m" data-page-node-id="Qn5SvldncmBYkZzISRTIBS">导出对局 CSV</button>
   <button id="btn-export-r" data-page-node-id="32xN0cp4omNPvVPSB9ZRZ3">导出段位 CSV</button>
-  <span class="status" data-page-node-id="cfZAKsHX5Xj9heK0gYVqLV"><span class="dot" id="watch-dot" data-page-node-id="uJqX76AqnVgi0dDdKnteEW"></span><span id="watch-txt" data-page-node-id="Ckotv3fuo6T2OQMainKUh9">…</span></span>
+  <span class="status" data-page-node-id="cfZAKsHX5Xj9heK0gYVqLV"><span class="dot" id="watch-dot" data-page-node-id="uJqX76AqnVgi0dDdKnteEW"></span><span id="watch-txt" data-page-node-id="Ckotv3fuo6T2OQMainKUh9">…</span><button id="boot-retry" class="ti-btn" hidden title="重新执行启动期的归档与回填">重试启动任务</button></span>
 </div>
 
 <p id="format-focus-note" class="ci" style="margin:0 0 10px" hidden></p>
@@ -283,6 +279,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=0.5.3-quiet-page"></script>
+<script src="app.js?v=0.5.4-boot-retry"></script>
 </body>
 </html>

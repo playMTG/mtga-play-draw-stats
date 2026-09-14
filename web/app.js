@@ -909,6 +909,21 @@ async function loadRankCurve() {
 $("btn-export-m").addEventListener("click", () => {
   window.open(`/api/export?type=matches&${params()}`);
 });
+// 只在启动任务失败时才出现（见 loadStatus）。POST /api/retry_boot 是幂等的，
+// 服务端把「检查 booting + 置位」放进同一把锁，连点也只会起一个回填线程。
+$("boot-retry").addEventListener("click", async () => {
+  const btn = $("boot-retry");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/retry_boot", { method: "POST" }).then(x => x.json());
+    if (!r.ok && r.error) alert(r.error);
+  } catch {
+    alert("重试请求失败，请确认面板服务仍在运行");
+  } finally {
+    btn.disabled = false;
+    await loadStatus();
+  }
+});
 $("btn-export-r").addEventListener("click", () => {
   window.open("/api/export?type=ranks");
 });
@@ -926,12 +941,21 @@ async function loadStatus() {
   try {
     const s = await api("/api/status");
     $("watch-dot").className = "dot" + (s.watching ? " ok" : "");
-    $("watch-txt").textContent = s.last_error ? `解析待重试：${s.last_error}` : s.watching
+    let text = s.last_error ? `解析待重试：${s.last_error}` : s.watching
       ? `监听中 · 库内 ${s.db.matches} 场`
       : `监听未启用 · 库内 ${s.db.matches} 场`;
+    // 启动期的归档／回填失败以前在页面上**完全不可见**：`/api/retry_boot` 与
+    // `_state["boot_error"]` 都在，但前端从没引用过（R11.3 的验收标准是
+    // 「回填错误可见可重试」，实际只做了后端半边）。失败时补一句并给重试按钮——
+    // 正常情况按钮不出现，所以不增加任何日常噪音。
+    const failed = !!s.boot_error;
+    if (failed) text += ` · 启动任务失败：${s.boot_error}`;
+    $("watch-txt").textContent = text;
+    $("boot-retry").hidden = !failed;
     renderCardNamesNote(s.card_names);
   } catch {
     $("watch-txt").textContent = "服务不可达";
+    $("boot-retry").hidden = true;
   }
 }
 

@@ -133,13 +133,14 @@
 
 ---
 
-## 发布与 GitHub（只摸底，不操作）
+## 发布与 GitHub
 
 当前仓库：
 
-- remote: `https://github.com/playMTG/mtga-play-draw-stats.git`  
-- 分支：`main`。**注意（2026-09-12 实测）**：`git branch -vv` 显示 `[origin/main: gone]`——远端分支已不在，本地已积累多个提交未推送，推送前必须先确认远端现状。
-- 本机已装 `git` 与 `gh`，但 **`gh` 未登录**（`gh auth status`：not logged in）  
+- remote: `https://github.com/playMTG/mtga-play-draw-stats.git`
+- 分支：`main`。**（2026-09-13 实测更正）** 之前记的「`[origin/main: gone]`、远端分支已不在」是**误判**：远端一直在，只是本地从没 `git fetch` 过（`refs/remotes/` 是空的）。`git ls-remote --heads origin` 一次就拿到了 `refs/heads/main`。**判断远端状态要用 `ls-remote`，别只看 `branch -vv`。**
+- 本机已装 `git` 与 `gh`，且 **`gh` 已登录**（`gh auth status`：account `playMTG`，keyring 存 token，scopes 含 `repo`）。**（2026-09-13 更正，之前记的「未登录」已过期）**
+- 走 HTTP 代理 `http://127.0.0.1:7897`（`.git/config` 的 `[http] proxy`），fetch／push 均通。
 - README 已指向 Releases 的 Windows ZIP
 
 密钥与推送：
@@ -147,9 +148,9 @@
 | 项 | 现状 | 说明 |
 |---|---|---|
 | git 身份 | `playMTG` / noreply 邮箱 | 已在 `.git/config` |
-| gh 登录 | 无 | 需要你在本机 `gh auth login` 或配置 PAT；**我这边没有你的令牌，也不会代你创建/保管密钥** |
-| HTTPS 推送 | 取决于系统 Git 凭据管理器是否已有 token | 未登录时 push 会要账号密码/浏览器授权 |
-| Release | README 链到 `v0.1.0` | 发版应用 tag + GitHub Release 附 Windows ZIP |
+| gh 登录 | **已登录**（`playMTG`，scopes: gist/read:org/repo/workflow） | 2026-09-13 实测；token 存在系统 keyring，不进仓库、不进聊天记录 |
+| HTTPS 推送 | 可用 | 经本机代理；凭据由系统 Git 凭据管理器（`helper-selector`）提供 |
+| Release | README 链到 Releases 的 `latest` | 发版应用 tag + GitHub Release 附 Windows ZIP；**当前最新 release 是 `v0.3.1`，而 `main` 已领先它 14 个提交** |
 
 远景上的版本策略（讨论稿）：
 
@@ -169,7 +170,7 @@
    - ~~**轮抓筛选拆分**（P2 的待做部分）：让首页套牌下拉能直接选中某一次 draft，而不是整块「轮抽套牌」。~~ **已完成（2026-09-12）**：不做全展开（314 → 约 630 项），改为二级联动——只有名字下有多个 deck_id 时才出现第二级，正好 39 项。两级是「求交」不是替换。见 `DESIGN.md`「V1 续做 套牌筛选二级联动」。
    - **V3 收尾**：~~更深的首页入口重构。~~ **已完成（2026-09-13）**：首页新增「最近在打的套牌」入口区（按 deck 身份一行一副，限制赛每次 draft 各自成行，点进去即套牌旅程），并修掉 V3 赛制自适应「从未生效」的死代码。见 `DESIGN.md`「V3 收尾 首页套牌入口与赛制自适应」。
    - ~~**赛事译名核验**：见上方「赛事名称修正」，三处都要先核对官方／社区常用译名，不凭口述直接改。~~ **已完成（2026-09-13）**：四项代码改动本就已落地，本轮补齐来源并顺手补了六个官方已给中文名的系列。见 `DESIGN.md`「2026-09-13 核验」。
-3. 发布动作（V4）在任一对外版本前单独做一次：`gh auth login` → 确认远端分支 → 打 tag → Release ZIP。**当前 `origin/main` 已 gone 且 `gh` 未登录，推送前必须先确认远端。**
+3. 发布动作（V4）在任一对外版本前单独做一次：确认远端分支（`git ls-remote --heads origin`）→ 打 tag → Release ZIP。**`gh` 已登录、远端可达，这条不再有前置阻塞；只是发版本身还没做。**
 
 ---
 

@@ -103,6 +103,7 @@ _THEME = {
     "hot_wr": "result",
     "play_draw_streak": "side", "pd_skew": "side",
     "repeat_commander": "opponent", "repeat_opponent": "opponent",
+    "rare_commander": "opponent",
     "revenge": "opponent", "nemesis": "opponent",
     "volume": "tempo", "blitz": "tempo", "arc": "tempo",
     "milestone": "history",
@@ -114,13 +115,17 @@ _THEME = {
 _WEIGHT = {
     "milestone": 1.1, "hot_wr": 1.0, "play_draw_streak": 1.0,
     "revenge": 0.95, "repeat_opponent": 0.9, "nemesis": 0.85,
-    "repeat_commander": 0.85, "arc": 0.8, "pd_skew": 0.6,
-    "blitz": 0.5, "volume": 0.25,
+    "repeat_commander": 0.85, "arc": 0.8, "rare_commander": 0.75,
+    "pd_skew": 0.6, "blitz": 0.5, "volume": 0.25,
 }
 
 # 里程碑的整数关口。刻意稀疏——每一关都报就没人在意了。
 MILESTONES = (100, 250, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000,
               6000, 7000, 8000, 9000, 10000, 12000, 15000, 20000)
+
+# 「久违的主将」的门槛：见过、但距今这么多天没再遇到。
+# 实测（全历史 882 天）180 天会触发 45 天 = 5%，是合适的稀有度。
+RARE_COMMANDER_DAYS = 180
 
 
 def _theme(kind: str) -> str:
@@ -437,6 +442,30 @@ def highlights(rows, recent_kinds: dict[str, int] | None = None,
             name, losses, wins, r = best_nemesis
             add("nemesis", pick("nemesis", [r["match_id"], name],
                                 name=name, losses=losses, wins=wins), [r], n)
+
+    # ---- 久违的主将：见过、但很久没再遇到 ----
+    # 实测（全历史 882 天）≥180 天会触发 45 天 = 5%，稀有度合适；样例「命源御神体，642 天没见」
+    # 这类话只有全库 last_seen 才说得出来。
+    seen_before = context.get("commanders") or {}
+    if seen_before:
+        oldest = None
+        for r in rows:
+            day_ms = r.get("start_time")
+            if not day_ms:
+                continue
+            for gid, name in zip(r.get("commanders") or [],
+                                 r.get("commander_names") or []):
+                last = seen_before.get(gid)
+                if last is None:
+                    continue          # 从没见过 = 首次相遇，不是「久违」
+                gap_days = int((day_ms - last) / 86_400_000)
+                if gap_days >= RARE_COMMANDER_DAYS and (oldest is None or gap_days > oldest[1]):
+                    oldest = (name, gap_days, r)
+        if oldest:
+            name, gap, r = oldest
+            add("rare_commander",
+                pick("rare_commander", [r["match_id"], name], name=name, days=gap),
+                [r], n, level="legendary" if gap >= 365 else "rare", days=gap)
 
     # 只保留真正的亮点；不再补一句「这一天已记录 N 场，X 胜 Y 负」——
     # 那个数字在下方统计卡里已逐项列出，放进评语纯属复读（用户反馈）。

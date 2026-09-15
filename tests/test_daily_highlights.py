@@ -438,3 +438,77 @@ def test_history_context_excludes_ai_opponents():
     ctx = history_context(dated, date(1970, 1, 2))
     assert ctx['total_before'] == 4
     assert ctx['opponents'] == {'真人': (0, 2)}, ctx['opponents']
+
+
+def test_rare_commander_needs_a_long_absence_and_a_prior_meeting():
+    """久违的主将 = **见过**、但隔了很久没再遇到。
+
+    实测（全历史 882 天）≥180 天会触发 45 天 = 5%，稀有度合适。
+    关键区分：**从没见过的**是「首次相遇」不是「久违」——`context["commanders"]`
+    里没有该 grpId 时必须不出这条，否则新系列一上市就会天天报。
+    """
+    DAY = 86_400_000
+
+    def rows_at(day_index, cmdr):
+        rs = [row(0, result='win'), row(1, result='loss')]
+        for i, r in enumerate(rs):
+            r['start_time'] = day_index * DAY + i
+            r['commanders'] = [cmdr]
+            r['commander_names'] = ['测试主将']
+        return rs
+
+    # 200 天没见 -> 触发，且达到 legendary 的门槛是 365 天，所以这里是 rare
+    facts = highlights(rows_at(200, 'g1'), context={"commanders": {"g1": 0}})
+    rc = next(f for f in facts if f['kind'] == 'rare_commander')
+    assert rc['level'] == 'rare' and rc['days'] == 200 and '测试主将' in rc['text']
+
+    # 400 天没见 -> legendary
+    rc2 = next(f for f in highlights(rows_at(400, 'g1'), context={"commanders": {"g1": 0}})
+               if f['kind'] == 'rare_commander')
+    assert rc2['level'] == 'legendary' and rc2['days'] == 400
+
+    # 179 天不够
+    assert all(f['kind'] != 'rare_commander'
+               for f in highlights(rows_at(179, 'g1'), context={"commanders": {"g1": 0}}))
+    # 从没见过 -> 不是「久违」（首见是另一回事，本项刻意不报）
+    assert all(f['kind'] != 'rare_commander'
+               for f in highlights(rows_at(999, 'g-new'), context={"commanders": {"g1": 0}}))
+    # 没有上下文时不能崩，只是不出这条
+    assert all(f['kind'] != 'rare_commander' for f in highlights(rows_at(999, 'g1')))
+
+
+def test_rare_commander_needs_a_long_absence_and_a_prior_meeting():
+    """久违的主将 = **见过**、但隔了很久没再遇到。
+
+    实测（全历史 882 天）≥180 天会触发 45 天 = 5%，稀有度合适。
+    关键区分：**从没见过的**是「首次相遇」不是「久违」——`context["commanders"]`
+    里没有该 grpId 时必须不出这条，否则新系列一上市就会天天报。
+    """
+    DAY = 86_400_000
+
+    def rows_at(day_index, cmdr):
+        rs = [row(0, result='win'), row(1, result='loss')]
+        for i, r in enumerate(rs):
+            r['start_time'] = day_index * DAY + i
+            r['commanders'] = [cmdr]
+            r['commander_names'] = ['测试主将']
+        return rs
+
+    # 200 天没见 -> 触发，且达到 legendary 的门槛是 365 天，所以这里是 rare
+    facts = highlights(rows_at(200, 'g1'), context={"commanders": {"g1": 0}})
+    rc = next(f for f in facts if f['kind'] == 'rare_commander')
+    assert rc['level'] == 'rare' and rc['days'] == 200 and '测试主将' in rc['text']
+
+    # 400 天没见 -> legendary
+    rc2 = next(f for f in highlights(rows_at(400, 'g1'), context={"commanders": {"g1": 0}})
+               if f['kind'] == 'rare_commander')
+    assert rc2['level'] == 'legendary' and rc2['days'] == 400
+
+    # 179 天不够
+    assert all(f['kind'] != 'rare_commander'
+               for f in highlights(rows_at(179, 'g1'), context={"commanders": {"g1": 0}}))
+    # 从没见过 -> 不是「久违」（首见是另一回事，本项刻意不报）
+    assert all(f['kind'] != 'rare_commander'
+               for f in highlights(rows_at(999, 'g-new'), context={"commanders": {"g1": 0}}))
+    # 没有上下文时不能崩，只是不出这条
+    assert all(f['kind'] != 'rare_commander' for f in highlights(rows_at(999, 'g1')))

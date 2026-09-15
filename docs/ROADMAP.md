@@ -125,6 +125,15 @@ R10 已分成：BO 模式统一筛选与逐局入口、构筑对手类型的手�
   - **Bot 局一律排除**：删 `#f-bot` 开关，请求恒带 `exclude_bot=true`；后端保留该参数（导出 CSV 与测试要用）。
   - **评语**：① 话术往「有情绪、有画面」重写（不编事实、不用纯感叹词凑数）；② **场次从优先级第 1 位降到末位**，并让 `_filter_for_volume` 按**绝对次数**而非占比保留重复主将——修掉「一旦打长了就必然只剩一条说今天打了很久」。真实库 2026-09-14（22 场）从「22 场打满。」变成「又和 拿卡地贱民阿耶尼 碰上了，这缘分不浅。 22 场连轴转，牌桌都快坐穿了。」
   - 验收：`pytest tests/ -q` → **277 passed**；`node --check web/app.js`；`tools/check_privacy.py --all` 扫 109 文件通过。空转验证：`_rank` 里 `volume` 改回返回 0 → 两条新测试同时失败。浏览器实测：页面 `<details>` 只剩明细里的打标控件、`#c-trend` 与 `#event-name-list` 不存在、控制台 0 错误。缓存参数 → `0.5.3-quiet-page`。详见 [DESIGN.md](DESIGN.md)「收尾 2026-09-14 全站信息减负」。
+- 页面与评价体系（2026-09-15，用户反馈第二批，不占新的 R 编号）：
+  - **顶部统计**：三张卡从「最近在打的套牌」下面移到筛选栏正下方，标题改为「全史总胜率／先手／后手」，每张多一行「今日…」；先后手卡新增**胜率**（`distribution()` 的 `play_wr`/`draw_wr`，分母只算有胜负的对局）。今日行由 `loadDaily` 填，空日与「全部日期」下清空。
+  - **天然单模式不标 BO1**：新增 `stats.sole_mode_events()`（整个历史里 match_mode 只有一种取值的 event_id），行上给 `mode_sole`，前端命中就不打印模式后缀。数据驱动、不硬编码赛事名。实测明细里带 BO1 的单元格从「每行都有」变成 0 个。
+  - **开局投降**：`play_draw` 为空且 `end_reason=Concede` 时给 `pd_note="scoop"`，先后手列显示「开局投降」而不是「–」。实测本机 15 场全部 Concede + 0 回合 + 12–52 秒；**但不是「调度投降」**——只有 2 场有调度记录，9 场是对手投降、6 场是我投降。
+  - **反复遇到的对手**：新增 `stats.repeat_opponents()` + `/api/repeat_opponents` + 页面卡片（第 11 个 loader）。排除 `is_bot` 与 `AIBotMatch`（教学局的 Sparky 那类）。实测 689 位对手 ≥2 次。
+  - **同日 ≥3 次同一对手进评语**：新增 `repeat_opponent` 候选。
+  - **今日评价 v2**：见 [DESIGN.md](DESIGN.md)「今日评价 v2 规划」——戏剧分取代优先级表、新鲜度降权（封顶 2.5 倍）、三拍装配（主题去重）、场次强制排最后、新增「当天走势」与「闪电局」两类。
+  - 验收：`pytest tests/ -q` → **284 passed**；`node --check web/app.js`；`tools/check_privacy.py --all` 扫 109 文件通过。空转验证：去掉「场次强制排最后」→ 新测试报 `assert 'volume' == 'blitz'` 失败。缓存参数 → `0.6.1-top-stats`。
+  - **待确认的数据问题**：2021-12-11 有 273 场 `source='untapped'` 记录（191 个对手各 4–6 场、几乎全负、平均 33 秒 vs 全库 Untapped 平均 403 秒），是导入异常日，已报用户但未按规则剔除。
 - 前端死代码清理（顺着 V3 收尾那个「恒为真的判断」找同类问题，不占新的 R 编号）：
   - **判据**：「定义了但 `app.js` 内部没人引用」。浏览器只加载 `app.js`，`index.html` 也没有内联事件处理器（全走 `addEventListener`），所以**只被 `.cjs` 测试引用的函数同样是死代码**。
   - **清掉三个**：`barChart` + 误差线插件 `ciPlugin`（含 `Chart.register(ciPlugin)`）与 `matchDetails` 的调用点都在 `396677b`（「Drop redundant play/draw and per-event charts」「BO1 rows no longer expand a long details panel」）被删；`dimVerdictColor` 在 `66be77d`（targeting 改朴素措辞）被删。连带死掉的还有 `fmtDur`（只被 `matchDetails` 用）与顶层变量 `pdChart`／`eventChart`。`index.html` 里只有 `#c-trend`／`#c-rank` 两个 canvas，没有孤儿 DOM。

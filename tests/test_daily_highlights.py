@@ -512,3 +512,29 @@ def test_rare_commander_needs_a_long_absence_and_a_prior_meeting():
                for f in highlights(rows_at(999, 'g-new'), context={"commanders": {"g1": 0}}))
     # 没有上下文时不能崩，只是不出这条
     assert all(f['kind'] != 'rare_commander' for f in highlights(rows_at(999, 'g1')))
+
+
+def test_every_template_bank_has_enough_variants():
+    """每个话术库至少 3 条——**模板数要跟出现频率成正比**。
+
+    这条守卫是量出来的：全历史 882 天里「3 连后手，不太顺。」单句出现过 **93 次**，
+    只因为 `streak_other_draw` 当时**只有 1 条模板**，而 3–4 连恰恰是最常见的档位。
+    `hot_wr`（5 条）也出现 40+ 次/句。补模板后：不同评语条数 356 → 461，
+    平均每条被用 2.12 → 1.64 次，最高频单句 93 → 17 次。
+    **以后加新类别时，先想它一年会出现几次，再决定写几句。**
+    """
+    thin = {k: len(v) for k, v in TEMPLATES.items() if len(v) < 3}
+    assert not thin, f"这些话术库少于 3 条，高频类别会反复吐同一句：{thin}"
+
+
+def test_every_template_bank_has_enough_variants():
+    """每个话术库至少 3 条——**模板数要跟出现频率成正比**。
+
+    这条守卫是量出来的：全历史 882 天里「3 连后手，不太顺。」单句出现过 **93 次**，
+    只因为 `streak_other_draw` 当时**只有 1 条模板**，而 3–4 连恰恰是最常见的档位。
+    `hot_wr`（5 条）也出现 40+ 次/句。补模板后：不同评语条数 356 → 461，
+    平均每条被用 2.12 → 1.64 次，最高频单句 93 → 17 次。
+    **以后加新类别时，先想它一年会出现几次，再决定写几句。**
+    """
+    thin = {k: len(v) for k, v in TEMPLATES.items() if len(v) < 3}
+    assert not thin, f"这些话术库少于 3 条，高频类别会反复吐同一句：{thin}"

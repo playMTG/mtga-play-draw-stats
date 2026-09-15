@@ -106,7 +106,17 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
     constructed = [r for r in selected if is_constructed_opponent_event(r['event_id'])]
     tags = Counter(r['opp_archetype_tag'] for r in constructed if r.get('opp_archetype_tag'))
     from .daily_highlights import highlights
-    facts = highlights(selected)
+    # 新鲜度降权（今日评价 v2，见 DESIGN.md）：把最近 7 天的对局重算一遍候选，
+    # 统计各 kind 出现过几次，交给选材引擎降权——这是治「天天同一句」的关键。
+    # 不需要新增持久化状态，7 天的行本来就在 `dated` 里。
+    recent_kinds = Counter()
+    for offset in range(1, 8):
+        back = chosen - timedelta(days=offset)
+        day_rows = [r for r in dated
+                    if datetime.fromtimestamp(r['start_time']/1000).date() == back]
+        for f in highlights(day_rows):
+            recent_kinds[f['kind']] += 1
+    facts = highlights(selected, recent_kinds)
     evidence_ids = {mid for fact in facts for mid in fact['match_ids']}
     from .play_draw import distribution, streaks
     # 查看历史日期时不得泄露之后的连续纪录；日期未知不能擅自放到最前面。

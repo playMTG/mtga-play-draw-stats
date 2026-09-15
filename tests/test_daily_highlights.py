@@ -151,3 +151,130 @@ def test_templates_have_no_meimei_typo():
     blob = repr(TEMPLATES)
     assert '太美了' not in blob
     assert 'volume_marathon' in TEMPLATES
+
+
+# ---------- 今日评价 v2 选材引擎（2026-09-15） ----------
+# 设计见 docs/DESIGN.md「今日评价 v2 规划」。旧版用固定优先级表挑前两条，
+# 结果是「天天同一句」+「两句互不相干」。新版按戏剧分选材、按主题去重。
+
+
+def test_volume_never_leads_when_anything_else_exists():
+    """场次永远排最后——它在顶部统计卡里已经有了，评语不该花一格复述它。
+
+    这是**硬规则**，不交给戏剧分：volume 的 level 是 legendary，加成 1.4 倍会
+    把「一天里遇到同一个人 3 次」压下去（实测过）。
+    """
+    rows = []
+    for i in range(22):
+        cmd = '阿耶尼' if i in (3, 9, 16) else f'对手{i}'
+        rows.append(row(i, pd='play' if i % 3 else 'draw',
+                        result='win' if i % 2 else 'loss', commander=cmd))
+    facts = highlights(rows)
+    assert facts[0]['kind'] != 'volume', [f['kind'] for f in facts]
+    assert 'repeat_commander' in {f['kind'] for f in facts}
+
+
+def test_freshness_demotes_but_does_not_erase():
+    """新鲜度只降权，不能把事实整条抹掉（2026-09-14 实测踩过）。
+
+    那天「一天里遇到同一个人 3 次」因为在最近 7 天说过而被降权，第一版把惩罚做成
+    1/(1+次数)（连续 7 天就是 1/8），结果它掉到阈值以下、评语退化成只剩一句
+    「22 场连轴转」——正好退回用户上次抱怨的状态。现在封顶 2.5 倍，
+    并且它必须仍然出现在评语里。
+    """
+    rows = []
+    for i in range(22):
+        cmd = '阿耶尼' if i in (3, 9, 16) else f'对手{i}'
+        rows.append(row(i, pd='play' if i % 3 else 'draw',
+                        result='win' if i % 2 else 'loss', commander=cmd))
+    fresh = {'repeat_commander': 3, 'volume': 3, 'blitz': 2}
+    facts = highlights(rows, fresh)
+    kinds = {f['kind'] for f in facts}
+    assert 'repeat_commander' in kinds, f'降权不该让真事实消失：{kinds}'
+    # 降权确实起了作用：没降权时它当开场
+    assert highlights(rows)[0]['kind'] == 'repeat_commander'
+
+
+def test_theme_dedup_keeps_two_facts_about_different_things():
+    """同一主题的两条不该同时出现，不同主题的必须都能出现。
+
+    最初把「胜率」和「先后手连击」都归进同一个 luck 主题，结果 20 场全胜全后手
+    只剩一条；细分后（result / side）两条都在。
+    """
+    rows = [row(i, pd='draw', result='win') for i in range(20)]
+    kinds = {f['kind'] for f in highlights(rows)}
+    assert {'hot_wr', 'play_draw_streak'} <= kinds, kinds
+
+
+def test_arc_comeback_and_collapse():
+    """当天走势：先连输后连赢 = 回魂（更重）；先连赢后连输 = 崩盘。"""
+    come = ([row(i, pd='play', result='loss') for i in range(3)]
+            + [row(i, pd='draw', result='win') for i in range(3, 9)])
+    arc = next(f for f in highlights(come) if f['kind'] == 'arc')
+    assert arc['level'] == 'legendary' and arc['first'] == 3 and arc['last'] == 6
+
+    fall = ([row(i, pd='play', result='win') for i in range(3)]
+            + [row(i, pd='draw', result='loss') for i in range(3, 9)])
+    arc2 = next(f for f in highlights(fall) if f['kind'] == 'arc')
+    assert arc2['level'] == 'rare' and arc2['first'] == 3 and arc2['last'] == 6
+
+    # 两段都不到 3 场不算「走势」，只是普通波动
+    wobble = [row(i, pd='play', result='win' if i % 3 else 'loss') for i in range(9)]
+    assert all(f['kind'] != 'arc' for f in highlights(wobble))
+
+
+def test_blitz_needs_three_quick_games():
+    """3 场一分钟内结束才算闪电局；时长为 0（未记录）不算。
+
+    用例刻意让胜负交错——全胜的日子 hot_wr 与先后手连击会占满两格，
+    闪电局挤不进去（那样测的就不是闪电局本身了）。
+    """
+    quick = [dict(row(i, result='win' if i % 2 else 'loss'), duration_sec=30)
+             for i in range(6)]
+    assert any(f['kind'] == 'blitz' for f in highlights(quick))
+    # 两场不够
+    assert all(f['kind'] != 'blitz' for f in highlights(quick[:2]))
+    # 时长为 0 = 未记录，不能当成「闪电局」
+    zero = [dict(row(i, result='win' if i % 2 else 'loss'), duration_sec=0)
+            for i in range(6)]
+    assert all(f['kind'] != 'blitz' for f in highlights(zero))
+
+
+def test_assemble_forces_volume_last_even_when_it_scores_higher():
+    """直接测 `_assemble`：场次的分**更高**时也必须排最后。
+
+    上面那条端到端用例其实守不住这条规则——本机权重下场次的分本来就不高，
+    去掉「强制最后」它照样通过（实测过）。所以这里用手造候选直接钉住规则本身：
+    场次的 `level=legendary` 有 1.4 倍加成，分确实高于一个被降权过的闪电局。
+    """
+    from app.daily_highlights import _assemble, _drama
+
+    volume = {"kind": "volume", "text": "24 场", "n": 24, "denominator": 24,
+              "match_ids": [], "level": "legendary"}
+    blitz = {"kind": "blitz", "text": "闪电局", "n": 3, "denominator": 24,
+             "match_ids": []}
+    fresh = {"blitz": 3}   # 最近 7 天说过 3 次 → 降权
+    assert _drama(volume, 24, fresh) > _drama(blitz, 24, fresh), "前提不成立"
+    assert _assemble([volume, blitz], 24, fresh)[0]["kind"] == "blitz"
+    # 只有场次可说的日子，它照样当开场（不是被删掉）
+    assert [c["kind"] for c in _assemble([volume], 24, fresh)] == ["volume"]
+
+
+def test_assemble_forces_volume_last_even_when_it_scores_higher():
+    """直接测 `_assemble`：场次的分**更高**时也必须排最后。
+
+    上面那条端到端用例其实守不住这条规则——本机权重下场次的分本来就不高，
+    去掉「强制最后」它照样通过（实测过）。所以这里用手造候选直接钉住规则本身：
+    场次的 `level=legendary` 有 1.4 倍加成，分确实高于一个被降权过的闪电局。
+    """
+    from app.daily_highlights import _assemble, _drama
+
+    volume = {"kind": "volume", "text": "24 场", "n": 24, "denominator": 24,
+              "match_ids": [], "level": "legendary"}
+    blitz = {"kind": "blitz", "text": "闪电局", "n": 3, "denominator": 24,
+             "match_ids": []}
+    fresh = {"blitz": 3}   # 最近 7 天说过 3 次 → 降权
+    assert _drama(volume, 24, fresh) > _drama(blitz, 24, fresh), "前提不成立"
+    assert _assemble([volume, blitz], 24, fresh)[0]["kind"] == "blitz"
+    # 只有场次可说的日子，它照样当开场（不是被删掉）
+    assert [c["kind"] for c in _assemble([volume], 24, fresh)] == ["volume"]

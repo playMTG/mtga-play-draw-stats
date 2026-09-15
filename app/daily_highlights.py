@@ -85,6 +85,103 @@ def _filter_for_volume(candidates: list[dict], n: int, volume: str | None) -> li
     return kept
 
 
+
+# ---------- 选材引擎（今日评价 v2，2026-09-15） ----------
+#
+# 旧版用固定优先级表（`_rank`）挑前两条事实。优先级表的问题是**没有量纲**：它只知道
+# 「A 类比 B 类重要」，不知道「今天这个 A 有多罕见」。于是本机 1.1 万场里大部分日子都
+# 触发同样那 2–3 条规则、输出同一句调侃（用户反馈「这个体系不太行」）。
+#
+# 新版给每个候选算一个**戏剧分**，再按「三拍解说」装配。设计见
+# docs/DESIGN.md「今日评价 v2 规划」。
+
+# 主题：三拍必须分属不同主题，否则会像现在这样两句都在说同一件事。
+# 分组要**细到「是不是同一个话题」**：胜率与先后手连击虽然都跟运气有关，但一个是
+# 「赢了没有」、一个是「谁先动」，是两件事，不该互相挤掉（最初把两者都归进 luck，
+# 结果 20 场全胜全后手只剩一条）。
+_THEME = {
+    "hot_wr": "result",
+    "play_draw_streak": "side", "pd_skew": "side",
+    "repeat_commander": "opponent", "repeat_opponent": "opponent",
+    "volume": "tempo", "blitz": "tempo", "arc": "tempo",
+}
+
+# 每个类别的「分量」基准。数值只用于横向比较，不必有绝对含义。
+# **场次刻意给得很低**：它是背景板，不该压过「一天里遇到同一个人 3 次」这类真事实
+# （2026-09-14 用户口径：「一旦打长了就必然只有一条说今天打了很久」）。
+_WEIGHT = {
+    "hot_wr": 1.0, "play_draw_streak": 1.0, "repeat_opponent": 0.9,
+    "repeat_commander": 0.85, "arc": 0.8, "pd_skew": 0.6,
+    "blitz": 0.5, "volume": 0.25,
+}
+
+
+def _theme(kind: str) -> str:
+    return _THEME.get(kind, "other")
+
+
+def _drama(c: dict, n: int, recent_kinds: dict[str, int]) -> float:
+    """戏剧分 = 稀有度 × 分量 × 证据量 × 新鲜度 × 级别加成。越大越该当开场。
+
+    刻意**不用「证据占比」**：占比会让场次白拿满分（它的分母就是当天总场次），
+    而重复对手这类事实的分母是当天全部对局，22 场里遇到 3 次只有 13.7%，按占比
+    算会被场次压过去——正是用户反馈要修的那个毛病。改用**绝对证据量**的对数微调：
+    3 次与 30 次的差别是真实的，但不该是线性的。
+
+    - 稀有度：有理论概率的（先后手连击）用 `sqrt(1/p)` 量级（封顶 50）；
+    - 新鲜度：最近 7 天说过同类事实就降权——治「天天同一句」的关键。但**必须封顶**：
+      第一版用 `1/(1+次数)`，连续说 7 天就降成 1/8，结果 2026-09-14 那天「一天里遇到
+      同一个人 3 次」被压到阈值以下，评语退化成只剩一句「22 场连轴转」——正好退回
+      用户上次抱怨的状态。降权只能是**并列时的偏好**，不能变成「有也不说」。
+      → 封顶 2.5 倍，且转折用相对阈值。
+    """
+    import math
+    rarity = 1.0
+    prob = (c.get("probability") or {}).get("p")
+    if isinstance(prob, (int, float)) and 0 < prob < 1:
+        rarity = min(1.0 / prob, 50.0) ** 0.5
+    base = _WEIGHT.get(c["kind"], 0.5)
+    evidence = 1.0 + 0.12 * math.log(1 + max(c.get("n") or 0, 0))
+    seen = recent_kinds.get(c["kind"], 0)
+    freshness = 1.0 / (1 + 0.6 * min(seen, 3))   # 最多降到 0.36 倍，不封死
+    level_bonus = 1.4 if c.get("level") == "legendary" else 1.0
+    return rarity * base * evidence * freshness * level_bonus
+
+
+def _assemble(cands: list[dict], n: int, recent_kinds: dict[str, int]) -> list[dict]:
+    """按「开场 → 转折 → 收尾」装配，每拍主题不重复。
+
+    两条硬规则：
+
+    1. **场次永远排最后**。它现在已经在顶部统计卡里写着（「今日 15 胜 9 负」），
+       评语再花一格复述它是纯浪费；它只在「确实没别的可说」时当开场。
+       这条不交给戏剧分——`level="legendary"` 会让它白拿 1.4 倍加成，实测会把
+       「一天里遇到同一个人 3 次」压下去。
+    2. 转折用**相对阈值**（相对开场一档）。用绝对值会让「今天确实发生了、但最近
+       说过」的事实被整条丢掉，最后只剩背景板（2026-09-14 实测踩过）。
+    """
+    if not cands:
+        return []
+    def sort_key(c):
+        return (c["kind"] == "volume", -_drama(c, n, recent_kinds), -c["n"])
+    scored = sorted(cands, key=sort_key)
+    lede = scored[0]
+    lede_score = _drama(lede, n, recent_kinds)
+    picks = [lede]
+    used = {_theme(lede["kind"])}
+    for c in scored[1:]:
+        if len(picks) >= 2:
+            break
+        if _theme(c["kind"]) in used:
+            continue
+        # 转折要跟开场是同一量级，否则不如不说
+        if _drama(c, n, recent_kinds) < 0.3 * lede_score:
+            continue
+        picks.append(c)
+        used.add(_theme(c["kind"]))
+    return picks
+
+
 def _longest_commander_run(rows: list[dict], gid: str) -> list[dict]:
     """当天记录里连续遭遇同一主将的最长一段。
 
@@ -104,7 +201,8 @@ def _longest_commander_run(rows: list[dict], gid: str) -> list[dict]:
     return best
 
 
-def highlights(rows):
+def highlights(rows, recent_kinds: dict[str, int] | None = None):
+    recent_kinds = recent_kinds or {}
     if not rows:
         return []
     rows = sorted(rows, key=lambda r: (r["start_time"], r["match_id"]))
@@ -266,27 +364,34 @@ def highlights(rows):
                 level="legendary",
             )
 
-    def _rank(c):
-        k = c["kind"]
-        # 场次排最后：它是背景板，不该挤掉当天真正发生了什么
-        if k == "hot_wr":
-            return 0
-        if k == "play_draw_streak":
-            return 1 if c.get("level") == "legendary" else 6
-        if k == "repeat_commander":
-            return 2 if c.get("level") == "legendary" else 5
-        if k == "repeat_opponent":
-            return 3
-        if k == "pd_skew":
-            return 4
-        if k == "volume":
-            return 7
-        return 8
+    # ---- 当天走势（转折点）：先连输后连赢 = 回魂；先连赢后连输 = 崩盘 ----
+    # 只看有胜负的对局；两段各 ≥3 场才算「走势」，否则只是普通波动。
+    seq = [r for r in rows if r["my_result"] in ("win", "loss")]
+    if len(seq) >= 6:
+        head_res = seq[0]["my_result"]
+        head_n = 1
+        while head_n < len(seq) and seq[head_n]["my_result"] == head_res:
+            head_n += 1
+        tail_res = seq[-1]["my_result"]
+        tail_n = 1
+        while tail_n < len(seq) and seq[-1 - tail_n]["my_result"] == tail_res:
+            tail_n += 1
+        if (head_res != tail_res and head_n >= 3 and tail_n >= 3
+                and head_n + tail_n <= len(seq)):
+            key = "arc_comeback" if head_res == "loss" else "arc_collapse"
+            add("arc", pick(key, [r["match_id"] for r in seq] + [key],
+                            first=head_n, last=tail_n),
+                seq, n, level="legendary" if head_res == "loss" else "rare",
+                first=head_n, last=tail_n)
+
+    # ---- 闪电局：一分钟内就结束的对局 ----
+    blitz = [r for r in rows if (r.get("duration_sec") or 0) and r["duration_sec"] < 60]
+    if len(blitz) >= 3:
+        add("blitz", pick("blitz", [r["match_id"] for r in blitz], n=len(blitz)),
+            blitz, n)
 
     # 只保留真正的亮点；不再补一句「这一天已记录 N 场，X 胜 Y 负」——
     # 那个数字在下方统计卡里已逐项列出，放进评语纯属复读（用户反馈）。
-    # 没有亮点时返回空列表，由 insights.daily_report 决定 plain 的呈现。
     top = [c for c in candidates if c["kind"] != "results"]
     top = _filter_for_volume(top, n, volume)
-    top.sort(key=lambda c: (_rank(c), -c["n"]))
-    return top[:2]
+    return _assemble(top, n, recent_kinds)

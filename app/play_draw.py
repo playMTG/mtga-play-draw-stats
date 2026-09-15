@@ -6,9 +6,17 @@ def distribution(rows):
     play = sum(r['play_draw'] == 'play' for r in rows)
     draw = sum(r['play_draw'] == 'draw' for r in rows)
     known = play+draw
+    # 先后手各自的胜率（用户口径 2026-09-15：卡片上只有「先手率」看不出先后手
+    # 到底谁更吃亏，要跟全史那张卡一样把胜率也列出来）。分母只算有胜负的对局。
+    def _wr(side):
+        decided = [r for r in rows if r['play_draw'] == side and r['my_result'] in ('win', 'loss')]
+        wins = sum(r['my_result'] == 'win' for r in decided)
+        return {'wins': wins, 'n': len(decided),
+                'wr': round(100*wins/len(decided), 1) if decided else None}
     return {'play': play, 'draw': draw, 'unknown': len(rows)-known,
             'play_rate': round(100*play/known, 1) if known else None,
-            'draw_rate': round(100*draw/known, 1) if known else None}
+            'draw_rate': round(100*draw/known, 1) if known else None,
+            'play_wr': _wr('play'), 'draw_wr': _wr('draw')}
 
 
 def streaks(rows):

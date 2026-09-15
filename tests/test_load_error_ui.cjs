@@ -13,11 +13,13 @@ const stub = name => async () => {
   if (failures.has(name)) throw new Error(`${name} 读取失败`);
 };
 
-// 首页九个数据区块 + 「最近在打的套牌」入口，共十个 loader。清单在这里显式列出：
-// 往 RELOAD_SECTIONS 里加 loader 而忘了同步这里，calls.length 就对不上，测试会红。
+// 首页十个数据区块 + 「最近在打的套牌」入口 + 「反复遇到的对手」，共十一个 loader。
+// 清单在这里显式列出：往 RELOAD_SECTIONS 里加 loader 而忘了同步这里，calls.length
+// 就对不上，测试会红。
 const LOADERS = [
   ['loadOverview', '总览'], ['loadRecentDecks', '最近在打的套牌'], ['loadMulligans', '调度'],
-  ['loadCommanders', '对手主将'], ['loadOpponentTypes', '对手类型'], ['loadMatches', '对局明细'],
+  ['loadCommanders', '对手主将'], ['loadRepeatOpponents', '反复遇到的对手'],
+  ['loadOpponentTypes', '对手类型'], ['loadMatches', '对局明细'],
   ['loadStatus', '运行状态'], ['loadRankCurve', '段位曲线'], ['loadTargeting', '被针对指数'],
   ['loadDaily', '每日战报'],
 ];

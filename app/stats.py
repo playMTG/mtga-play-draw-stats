@@ -533,6 +533,22 @@ def commander_coverage(conn: sqlite3.Connection, exclude_abnormal: bool = True,
             "last": dates[-1] if dates else None}
 
 
+def sole_mode_events(conn: sqlite3.Connection) -> set[str]:
+    """整个历史里只出现过一种 `match_mode` 的 event_id。
+
+    这类赛事的 BO1/BO3 标签是纯噪音：史迹争锋、标准争锋、快速轮抽天生只有 BO1，
+    每一行都印一遍「BO1」既占地方又没有信息量（用户口径 2026-09-15：「史迹争锋和
+    标准争锋都只有 BO1，所以不要标 BO1」）。判据取自本机真实记录、**不硬编码赛事名**
+    ——新赛事第一次出现时按实际数据自动判定，也不会因为官方改了赛制而失效。
+    """
+    rows = conn.execute(
+        """SELECT event_id FROM matches
+            WHERE COALESCE(event_id, '') <> ''
+            GROUP BY event_id HAVING COUNT(DISTINCT COALESCE(match_mode, '未知')) <= 1"""
+    ).fetchall()
+    return {r["event_id"] for r in rows}
+
+
 def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                event: str | None = None, deck: str | None = None,
                limit: int = 500, offset: int = 0, lang: str = "zh",
@@ -575,6 +591,7 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
     games_by_match: dict[str, list[dict]] = {r["match_id"]: [] for r in rows}
     match_ids = list(games_by_match)
     deck_labels = limited_labels(conn)
+    sole_modes = sole_mode_events(conn)
     for start in range(0, len(match_ids), 500):
         batch = match_ids[start:start + 500]
         if not batch:
@@ -613,6 +630,13 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                 "duration_sec": r["duration_sec"],
                 "opponent_name": r["opponent_name"],
                 "play_draw": r["play_draw"],
+                # 先后手为空**且**是投降收场时，说明这局没走到第一回合就结束了
+                # （2026-09-15 实测本机 15 场全部 Concede、0 回合、12–52 秒）。
+                # 让前端显示「开局投降」而不是一个没有信息量的「–」。
+                # 注意**不能**笼统说成「调度投降」：那 15 场里只有 2 场有调度记录，
+                # 且 9 场是对手投降、6 场是我投降——「调度」二字对多数场次不成立。
+                "pd_note": ("scoop" if r["play_draw"] is None
+                            and (r["end_reason"] or "") == "Concede" else None),
                 "my_result": r["my_result"],
                 "end_reason": r["end_reason"],
                 "total_turns": r["total_turns"],
@@ -627,6 +651,8 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                 "my_deck_label": label_for(r["my_deck_tag"], r["my_deck_id"], deck_labels),
                 "source": r["source"],
                 "match_mode": r["match_mode"] or "未知",
+                # 该赛事在全部历史里只有这一种模式 → 前端不打印模式后缀
+                "mode_sole": r["event_id"] in sole_modes,
                 "opponent_type_eligible": is_constructed_opponent_event(r["event_id"]),
                 "opp_archetype_tag": r["opp_archetype_tag"],
                 "games": games_by_match.get(r["match_id"], []),
@@ -700,6 +726,64 @@ def deck_identities(conn: sqlite3.Connection, deck: str,
         for r in rows
     ]
     return {"deck": deck, "items": items, "total": sum(i["n"] for i in items)}
+
+
+def repeat_opponents(conn: sqlite3.Connection, exclude_abnormal: bool = True,
+                     event: str | None = None, deck: str | None = None,
+                     family: str | None = None, mode: str | None = None,
+                     deck_id: str | None = None, exclude_bot: bool = True,
+                     limit: int = 12, min_n: int = 2) -> dict:
+    """反复遇到的对手（同一个玩家名遇到 ≥2 次）。
+
+    用户口径（2026-09-15）：「今天打的这些场次，遇到过两次之前打过的对手，感觉可以
+    统计一下之前遇到的所有对局里反复遇到的同一个对手」。此前只有「对手主将」维度的
+    重复统计，**玩家维度一直没有**——同一个人换副牌就认不出来了。
+
+    口径：
+    - 只算真人：排除 `is_bot`（按自己套牌名打的标记），**也排除 `AIBotMatch`**
+      （教学局，`Sparky` 那类对手名看着像真人但没有 is_bot 标记）；
+    - 名字为空的记录不参与（无法确认是不是同一个人）；
+    - 按遇到次数降序，同次数按最近一次遇到的时间降序。
+
+    **已知数据问题**：本机 2021-12-11 有 273 场 `source='untapped'` 的导入记录
+    （平均 33 秒，而全库 Untapped 平均 403 秒），191 个对手每个 4–6 场、几乎全负，
+    集中在同一天。它们会出现在结果里（首次=最近=同一天，一眼可辨），没有按规则
+    剔除——「哪一天的数据不可信」应由用户判断，不该由代码悄悄决定。
+    """
+    conds = ["COALESCE(opponent_name, '') <> ''", "event_id NOT LIKE '%BotMatch%'"]
+    if exclude_abnormal:
+        conds.append("is_abnormal = 0")
+    if exclude_bot:
+        conds.append("is_bot = 0")
+    conds += [c for c in _filters(conn, event, deck, family, mode, deck_id) if c]
+    where = " AND ".join(["1=1"] + conds)
+    rows = conn.execute(
+        f"""SELECT opponent_name AS name, COUNT(*) n,
+                   SUM(my_result = 'win') wins, SUM(my_result = 'loss') losses,
+                   MIN(start_time) first_time, MAX(start_time) last_time,
+                   COUNT(DISTINCT date(start_time/1000, 'unixepoch', 'localtime')) days
+              FROM matches WHERE {where}
+             GROUP BY opponent_name HAVING n >= ?
+             ORDER BY n DESC, last_time DESC LIMIT ?""",
+        [min_n, limit],
+    ).fetchall()
+    total = conn.execute(
+        f"""SELECT COUNT(*) c FROM (SELECT opponent_name FROM matches WHERE {where}
+             GROUP BY opponent_name HAVING COUNT(*) >= ?)""",
+        [min_n],
+    ).fetchone()["c"]
+    return {
+        "total": total,
+        "rows": [{
+            "name": r["name"],
+            "n": r["n"],
+            "wins": r["wins"] or 0,
+            "losses": r["losses"] or 0,
+            "first_time": r["first_time"],
+            "last_time": r["last_time"],
+            "days": r["days"],
+        } for r in rows],
+    }
 
 
 def _day_of(ms: int | None) -> str:

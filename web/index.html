@@ -118,6 +118,15 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <span class="status" data-page-node-id="cfZAKsHX5Xj9heK0gYVqLV"><span class="dot" id="watch-dot" data-page-node-id="uJqX76AqnVgi0dDdKnteEW"></span><span id="watch-txt" data-page-node-id="Ckotv3fuo6T2OQMainKUh9">…</span><button id="boot-retry" class="ti-btn" hidden title="重新执行启动期的归档与回填">重试启动任务</button></span>
 </div>
 
+<!-- 全史与今日的先后手统计放在最顶上、并排显示（用户口径 2026-09-15：
+     「这种统计可以移到最顶上，跟今日先后手胜率放一块」）。
+     今日那几行由 loadDaily 填，空日/全部日期时自动留空。 -->
+<div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
+  <div class="card"><h2>全史总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div><div class="ci" id="k-total-today" style="margin-top:4px"></div></div>
+  <div class="card"><h2>先手</h2><div class="big" id="k-play-rate">–</div><div class="ci" id="k-play-rate-note"></div><div class="ci" id="k-play-ci" style="margin-top:4px"></div><div class="ci" id="k-play-today" style="margin-top:4px"></div></div>
+  <div class="card"><h2>后手</h2><div class="big" id="k-draw-rate">–</div><div class="ci" id="k-draw-rate-note"></div><div class="ci" id="k-draw-ci" style="margin-top:4px"></div><div class="ci" id="k-draw-today" style="margin-top:4px"></div></div>
+</div>
+
 <p id="format-focus-note" class="ci" style="margin:0 0 10px" hidden></p>
 <section class="card" style="margin-bottom:14px" data-page-node-id="HdlCFRAXVo1RfPPkLnV6qE">
   <div class="bar"><h2 style="margin:0" data-page-node-id="5D6G08hNtghxgz3AfRTUXJ">每日战报与对局明细</h2>
@@ -130,7 +139,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
   <div id="daily-block">
     <p id="daily-plain">正在读取本地战报…</p>
     <button id="daily-latest" hidden>查看最近有记录的一天</button>
-    <div id="daily-summary" class="grid g3" style="margin:12px 0"></div>
     <p id="daily-pd-streaks" class="ci" style="margin:12px 0"></p>
     <section id="daily-history-section" hidden>
       <div id="daily-history-lead" class="summary-list"></div>
@@ -159,12 +167,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
     <span class="ci" id="recent-decks-note"></span>
   </div>
   <div id="recent-decks-rows" class="summary-list"></div>
-</div>
-
-<div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
-  <div class="card"><h2>全史总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div></div>
-  <div class="card"><h2>先手率 / 先手胜率</h2><div class="big" id="k-play-rate">–</div><div class="ci" id="k-play-rate-note"></div><div class="ci" id="k-play-ci" style="margin-top:4px"></div></div>
-  <div class="card"><h2>后手率 / 后手胜率</h2><div class="big" id="k-draw-rate">–</div><div class="ci" id="k-draw-rate-note"></div><div class="ci" id="k-draw-ci" style="margin-top:4px"></div></div>
 </div>
 
 <div class="card" style="margin-bottom:14px" data-page-node-id="UN3PNXlDacVJhAPsxiO5r6">
@@ -209,6 +211,11 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 <div class="wrap" data-page-node-id="JMWgzRk6yebjUSM5lSdSB9"><table id="t-cmdr" data-page-node-id="qv3beE3lTfdWLZDf4IkuXA"><thead data-page-node-id="xVXeZuRypbSb3SrQlnLm1R"><tr data-page-node-id="kE6Pdi5Cy5vB8vmYRkyduR">
     <th data-page-node-id="eTpo7jI3M4SzDTj3rdIGxE">主将</th><th data-page-node-id="aAo5dcQXo8P39Lq4FVYBtg">类型</th><th data-page-node-id="J3yjDSpR61GM1rTFHMf2iH">场次</th><th data-page-node-id="0h9lUHKTqDjkUqaDy0avbv">胜率</th><th data-page-node-id="B4hZzEkXAAdeIQa4Uq9ZOQ">先手</th><th data-page-node-id="p8AgpIqedK14PbjIKKumla">后手</th><th data-page-node-id="3wAbEEEi2sF7f9joFoiBme">打标</th>
   </tr></thead><tbody data-page-node-id="Vk00r5j8xQHLbUcY4N1XMx"></tbody></table></div>
+</div>
+
+<div class="card" style="margin-top:14px" id="repeat-opponents-card">
+  <div class="bar"><h2 style="margin:0">反复遇到的对手 <span class="ci" id="repeat-opponents-hint"></span></h2></div>
+  <div id="repeat-opponents-rows" class="summary-list"></div>
 </div>
 
 <div class="card" style="margin-top:14px" id="opponent-types-card">
@@ -279,6 +286,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=0.5.4-boot-retry"></script>
+<script src="app.js?v=0.6.1-top-stats"></script>
 </body>
 </html>

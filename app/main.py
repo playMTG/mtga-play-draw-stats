@@ -544,6 +544,17 @@ def api_opponent_types(exclude_abnormal: bool = True, exclude_bot: bool = True,
              event, deck, family, mode, deck_id)
 
 
+@app.get("/api/repeat_opponents")
+def api_repeat_opponents(exclude_abnormal: bool = True, exclude_bot: bool = True,
+                         event: str | None = None, deck: str | None = None,
+                         deck_id: str | None = None, family: str | None = None,
+                         mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$"),
+                         limit: int = 12):
+    """反复遇到的对手（同一玩家名 ≥2 次）。玩家维度的重复统计，主将维度在 /api/commanders。"""
+    return q(stats.repeat_opponents, exclude_abnormal, event, deck, family, mode,
+             deck_id, exclude_bot, limit)
+
+
 @app.get("/api/rank_curve")
 def api_rank_curve(track: str = "constructed"):
     """段位曲线（仅带时间戳快照；相邻重复段位已合并）。"""

@@ -323,6 +323,25 @@ $("cmdr-sort-count").addEventListener("click", () => { cmdrSort = "count"; syncC
 $("cmdr-sort-recent").addEventListener("click", () => { cmdrSort = "recent"; syncCmdrSortBtns(); loadCommanders(); });
 syncCmdrSortBtns();
 
+// 反复遇到的对手（玩家维度）。此前只有「对手主将」的重复统计，同一个人换副牌就认不出来。
+// 后端排除 is_bot 与 AIBotMatch（教学局），名字为空的记录不参与。
+async function loadRepeatOpponents() {
+  const v = uiVersion;
+  const r = await api("/api/repeat_opponents", { limit: 10 });
+  if (isStale(v)) return;
+  const fmtDay = ts => ts ? new Date(ts).toISOString().slice(0, 10) : "–";
+  $("repeat-opponents-hint").textContent = r.total
+    ? `共 ${r.total} 位对手遇到过 2 次以上` : "";
+  $("repeat-opponents-rows").innerHTML = r.rows.map(x => {
+    const span = fmtDay(x.first_time) === fmtDay(x.last_time)
+      ? fmtDay(x.first_time)
+      : `${fmtDay(x.first_time)} → ${fmtDay(x.last_time)}`;
+    return `<div class="summary-item"><strong>${esc(x.name)}</strong>`
+      + `<span>${x.n} 场 · ${x.wins} 胜 ${x.losses} 负 · ${span}`
+      + (x.days > 1 ? ` · 跨 ${x.days} 天` : "") + `</span></div>`;
+  }).join("") || `<div class="ci">当前筛选下没有遇到过 2 次以上的对手。</div>`;
+}
+
 async function loadOpponentTypes() {
   const v = uiVersion;
   const report = await api("/api/opponent_types");
@@ -374,6 +393,10 @@ function endReasonLabel(reason) {
 function gameDetails(r) {
   const mode = r.match_mode || "未知";
   const games = r.games || [];
+  // 该赛事在整个历史里只有这一种模式（史迹争锋、标准争锋、快速轮抽天生只有 BO1），
+  // 逐行印「BO1」既占地方又没有信息量 → 整块不显示。判据由后端按真实记录给出
+  // （stats.sole_mode_events），不硬编码赛事名。
+  if (r.mode_sole) return "";
   // BO1 不再展开逐局；BO3 用 title 悬停，不占表格行高
   if (mode === "BO1" || games.length <= 1) {
     return `<span class="ci">${esc(mode)}</span>`;
@@ -384,6 +407,16 @@ function gameDetails(r) {
     return `G${game.game_no ?? "?"} ${playDraw} ${result}`;
   }).join(" · ");
   return `<span class="ci" title="${esc(tip)}">${esc(mode)}</span>`;
+}
+
+// 先后手列：先手／后手／开局投降／–。
+// 「先后手统计不到」的对局实测**全部**是没走到第一回合就投降收场（本机 15 场：
+// 100% Concede、0 回合、12–52 秒），所以不显示没有信息量的「–」。
+function playDrawCell(r) {
+  if (r.play_draw === "play") return "先手";
+  if (r.play_draw === "draw") return "后手";
+  if (r.pd_note === "scoop") return `<span class="ci" title="未记录先后手：对局在第一回合前就因投降结束">开局投降</span>`;
+  return "–";
 }
 
 function deckOpenButton(deck, deckId, deckVersion, name) {
@@ -416,7 +449,7 @@ function matchRow(r) {
     <td>${eventMarkup(r.event_id, r.event_label)} <span class="ci">${gameDetails(r)}</span></td>
     <td class="clip" title="${esc(r.my_deck_label || r.my_deck_tag || "套牌未记录")}">${deckLink(r)}</td>
     <td>${ownCommander}</td>
-    <td>${r.play_draw === "play" ? "先手" : r.play_draw === "draw" ? "后手" : "–"}</td>
+    <td>${playDrawCell(r)}</td>
     <td>${r.my_result === "win" ? "胜" : r.my_result === "loss" ? "负" : "待确认"}</td>
     <td>${esc(r.opponent_name || "–")}</td>
     <td>${oppCell}</td>
@@ -727,6 +760,7 @@ async function loadDaily() {
     $("daily-block").hidden = true;
     $("daily-all-note").hidden = false;
     $("daily-asof").textContent = "";
+    renderTodayStats(null, null);   // 顶部那三行「今日…」也要清掉，只留全史
     return;
   }
   $("daily-block").hidden = false;
@@ -737,7 +771,8 @@ async function loadDaily() {
     $("daily-latest").hidden = true;
     $("daily-plain").textContent = "正在读取本地战报…";
     $("daily-plain").className = "";
-    for (const id of ["daily-summary", "daily-asof", "daily-pd-streaks", "daily-history-lead"]) $(id).textContent = "";
+    for (const id of ["daily-asof", "daily-pd-streaks", "daily-history-lead"]) $(id).textContent = "";
+    renderTodayStats(null, null);
     $("daily-history-section").hidden = true;
   }
   dailyScope = scope;
@@ -749,6 +784,7 @@ async function loadDaily() {
       $("daily-plain").textContent = "战报读取失败，请重试。";
       $("daily-plain").className = "";
       $("daily-latest").hidden = true;
+      renderTodayStats(null, null);
     }
     return;
   }
@@ -766,13 +802,7 @@ async function loadDaily() {
   const dailyLevel = r.highlights?.[0]?.level;
   $("daily-plain").className = dailyLevel ? `daily-highlight ${dailyLevel}` : "";
   const pd = r.play_draw;
-  // 所选日期没有对局时，这三张卡只会显示「–%」「0 胜 0 负 · 0 场有胜负」——零信息，
-  // 首屏（默认落在「今天」，而当天常还没打牌）会被这一片「–」占满。直接藏起来，
-  // 让「查看最近有记录的一天」成为空日唯一显眼的动作。
-  $("daily-summary").hidden = !s.n;
-  $("daily-summary").innerHTML = `<div class="card"><h2>当天胜率</h2><div class="big">${s.win_rate.wr ?? "–"}%</div><div class="ci">${s.wins} 胜 ${s.losses} 负 · ${s.win_rate.n} 场有胜负</div></div>
-    <div class="card"><h2>当天先手率</h2><div class="big">${pd?.day.play_rate ?? "–"}%</div><div class="ci">先手 ${s.play} 场 · 后手 ${s.draw} 场</div></div>
-    <div class="card"><h2>当天后手率</h2><div class="big">${pd?.day.draw_rate ?? "–"}%</div><div class="ci">${s.play_rate.n} 场先后手已知 · 未知 ${s.unknown_pd} 场</div></div>`;
+  renderTodayStats(s, pd);
   // 这里原来有三行「当天最长 / 截至所选日期的当前连续 / 历史最长」加一句统计口径，
   // 再加一段「赛事 · N 场 · X 胜 Y 负 · 先手 a / 后手 b / 未知 c」的逐赛事罗列、
   // 常遇主将、BO 模式拆分、对手类型覆盖率（用户反馈：这些数据全都没必要）。
@@ -793,6 +823,25 @@ async function loadDaily() {
   if (hasBaseline) {
     $("daily-history-lead").innerHTML = `<p><strong>${esc(history.headline)}</strong></p>`;
   }
+}
+
+// 今日那三行直接写进最顶上的全史卡里（用户口径 2026-09-15：「这种统计可以移到
+// 最顶上，跟今日先后手胜率放一块」）。空日与「全部日期」下清空——全史部分不受影响。
+// 先后手胜率来自后端 play_draw.play_wr / draw_wr（分母只算有胜负的对局）。
+function todaySideLine(rate, x, label) {
+  const parts = [`今日${label}率 ${rate ?? "–"}%`];
+  if (x && x.n) parts.push(`${label}胜率 ${x.wr}%（${x.wins} 胜 / ${x.n} 场）`);
+  return parts.join(" · ");
+}
+
+function renderTodayStats(s, pd) {
+  const has = !!(s && s.n);
+  $("k-total-today").textContent = has
+    ? `今日 ${s.wins} 胜 ${s.losses} 负 · 胜率 ${s.win_rate.wr ?? "–"}%` : "";
+  $("k-play-today").textContent = has
+    ? todaySideLine(pd?.day?.play_rate, pd?.day?.play_wr, "先手") : "";
+  $("k-draw-today").textContent = has
+    ? todaySideLine(pd?.day?.draw_rate, pd?.day?.draw_wr, "后手") : "";
 }
 
 function fillSelect(sel, list) {
@@ -1003,7 +1052,7 @@ $("card-names-seed").addEventListener("click", async () => {
 // 改成 allSettled + 汇总提示：失败要看得见，但不该拖垮其余内容（R13.4）。
 const RELOAD_SECTIONS = [
   ["总览", loadOverview], ["最近在打的套牌", loadRecentDecks], ["调度", loadMulligans],
-  ["对手主将", loadCommanders],
+  ["对手主将", loadCommanders], ["反复遇到的对手", loadRepeatOpponents],
   ["对手类型", loadOpponentTypes], ["对局明细", loadMatches], ["运行状态", loadStatus],
   ["段位曲线", loadRankCurve], ["被针对指数", loadTargeting], ["每日战报", loadDaily],
 ];

@@ -113,9 +113,12 @@ def highlights(rows):
     candidates = []
 
     def add(kind, text, evidence, denominator, **extra):
+        # 只补句号：模板里已经有「？」「！」「…」时不能再补，否则出现「？。」
+        if text and text[-1] not in "。？！…":
+            text += "。"
         candidates.append({
             "kind": kind,
-            "text": text + ("。" if not text.endswith("。") else ""),
+            "text": text,
             "n": len(evidence),
             "denominator": denominator,
             "match_ids": [r["match_id"] for r in evidence],
@@ -242,20 +245,43 @@ def highlights(rows):
                     len(identified) or n,
                 )
 
+    # 同一天里撞上同一个**玩家** ≥3 次（用户口径 2026-09-15）。
+    # 与上面的「重复主将」是两回事：主将维度的重复常常只是环境里同一副牌多，
+    # 玩家维度的重复说明当天真的反复排到同一个人。玩家名来自日志的 opponent_name。
+    opponents = defaultdict(list)
+    for r in rows:
+        name = (r.get("opponent_name") or "").strip()
+        if name and not r.get("is_bot"):
+            opponents[name].append(r)
+    if opponents:
+        oname = min(opponents, key=lambda k: (-len(opponents[k]), k))
+        ogroup = opponents[oname]
+        if len(ogroup) >= 3:
+            add(
+                "repeat_opponent",
+                pick("repeat_opponent", [r["match_id"] for r in ogroup] + [oname],
+                     n=len(ogroup), name=oname),
+                ogroup,
+                n,
+                level="legendary",
+            )
+
     def _rank(c):
         k = c["kind"]
         # 场次排最后：它是背景板，不该挤掉当天真正发生了什么
         if k == "hot_wr":
             return 0
         if k == "play_draw_streak":
-            return 1 if c.get("level") == "legendary" else 5
+            return 1 if c.get("level") == "legendary" else 6
         if k == "repeat_commander":
-            return 2 if c.get("level") == "legendary" else 4
-        if k == "pd_skew":
+            return 2 if c.get("level") == "legendary" else 5
+        if k == "repeat_opponent":
             return 3
+        if k == "pd_skew":
+            return 4
         if k == "volume":
-            return 6
-        return 7
+            return 7
+        return 8
 
     # 只保留真正的亮点；不再补一句「这一天已记录 N 场，X 胜 Y 负」——
     # 那个数字在下方统计卡里已逐项列出，放进评语纯属复读（用户反馈）。

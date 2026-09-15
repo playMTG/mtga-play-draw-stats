@@ -129,15 +129,6 @@ def fetch_card(gid: str) -> dict | None:
     }
 
 
-def fetch_zh_name(set_code: str, collector_number: str) -> str | None:
-    """从 Scryfall 本地化接口取中文 printed_name（无中文的卡返回 None）。
-
-    Arena 专属印刷编号带 A- 前缀（如 A-193），该编号在 Scryfall 语言
-    路由下查不到本地化；不剥掉前缀冒用原版印刷，缺译名时保留英文。
-    """
-    return _fetch_zh_definitive(set_code, collector_number)[1]
-
-
 def _fetch_zh_definitive(set_code: str, collector_number: str) -> tuple[bool, str | None]:
     """(是否得到明确答复, 中文名)。网络失败时 definitive=False，可安全重试。"""
     data_ok, data = _curl_json_checked(

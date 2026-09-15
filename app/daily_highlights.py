@@ -103,17 +103,24 @@ _THEME = {
     "hot_wr": "result",
     "play_draw_streak": "side", "pd_skew": "side",
     "repeat_commander": "opponent", "repeat_opponent": "opponent",
+    "revenge": "opponent", "nemesis": "opponent",
     "volume": "tempo", "blitz": "tempo", "arc": "tempo",
+    "milestone": "history",
 }
 
 # 每个类别的「分量」基准。数值只用于横向比较，不必有绝对含义。
 # **场次刻意给得很低**：它是背景板，不该压过「一天里遇到同一个人 3 次」这类真事实
 # （2026-09-14 用户口径：「一旦打长了就必然只有一条说今天打了很久」）。
 _WEIGHT = {
-    "hot_wr": 1.0, "play_draw_streak": 1.0, "repeat_opponent": 0.9,
+    "milestone": 1.1, "hot_wr": 1.0, "play_draw_streak": 1.0,
+    "revenge": 0.95, "repeat_opponent": 0.9, "nemesis": 0.85,
     "repeat_commander": 0.85, "arc": 0.8, "pd_skew": 0.6,
     "blitz": 0.5, "volume": 0.25,
 }
+
+# 里程碑的整数关口。刻意稀疏——每一关都报就没人在意了。
+MILESTONES = (100, 250, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000,
+              6000, 7000, 8000, 9000, 10000, 12000, 15000, 20000)
 
 
 def _theme(kind: str) -> str:
@@ -201,8 +208,10 @@ def _longest_commander_run(rows: list[dict], gid: str) -> list[dict]:
     return best
 
 
-def highlights(rows, recent_kinds: dict[str, int] | None = None):
+def highlights(rows, recent_kinds: dict[str, int] | None = None,
+               context: dict | None = None):
     recent_kinds = recent_kinds or {}
+    context = context or {}
     if not rows:
         return []
     rows = sorted(rows, key=lambda r: (r["start_time"], r["match_id"]))
@@ -389,6 +398,45 @@ def highlights(rows, recent_kinds: dict[str, int] | None = None):
     if len(blitz) >= 3:
         add("blitz", pick("blitz", [r["match_id"] for r in blitz], n=len(blitz)),
             blitz, n)
+
+    # ---- 里程碑：当天的对局跨过整数关口 ----
+    # 「第 N 场」是玩家真正会记住的东西，而且**天然稀有**（只在关口那天出现），
+    # 所以它是这个体系里最该当开场的一类。
+    total_before = context.get("total_before")
+    if total_before is not None:
+        for mark in MILESTONES:
+            if total_before < mark <= total_before + n:
+                add("milestone", pick("milestone", [str(mark)], total=mark), rows, n,
+                    level="legendary")
+                break
+
+    # ---- 复仇 / 苦主：跟同一个人的交手历史 ----
+    # 「个人相关度」最直接的体现——比「遇到同一个主将」强，因为对手名是同一个玩家。
+    prior = context.get("opponents") or {}
+    if prior:
+        best_revenge = None
+        best_nemesis = None
+        for r in rows:
+            name = (r.get("opponent_name") or "").strip()
+            if not name or r.get("is_bot"):
+                continue
+            wins, losses = prior.get(name, (0, 0))
+            if r["my_result"] == "win" and losses >= 2 and losses > wins:
+                # 之前交手是明显劣势，今天拿下了
+                if best_revenge is None or losses > best_revenge[1]:
+                    best_revenge = (name, losses, wins, r)
+            elif r["my_result"] == "loss" and losses >= 3 and wins == 0:
+                # 从没赢过的对手，今天又输了
+                if best_nemesis is None or losses > best_nemesis[1]:
+                    best_nemesis = (name, losses, wins, r)
+        if best_revenge:
+            name, losses, wins, r = best_revenge
+            add("revenge", pick("revenge", [r["match_id"], name],
+                                name=name, losses=losses, wins=wins), [r], n)
+        if best_nemesis:
+            name, losses, wins, r = best_nemesis
+            add("nemesis", pick("nemesis", [r["match_id"], name],
+                                name=name, losses=losses, wins=wins), [r], n)
 
     # 只保留真正的亮点；不再补一句「这一天已记录 N 场，X 胜 Y 负」——
     # 那个数字在下方统计卡里已逐项列出，放进评语纯属复读（用户反馈）。

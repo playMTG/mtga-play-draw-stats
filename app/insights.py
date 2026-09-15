@@ -81,6 +81,38 @@ def aggregate(rows):
     }
 
 
+def history_context(dated, chosen):
+    """当天**之前**的历史上下文（今日评价 v2 的「个人相关度」要用）。
+
+    用户口径（2026-09-15）：「重新规划一下这个评价体系」。旧版 `highlights(rows)` 只拿
+    得到当天的行，所以永远说不出「这是你第 N 场」「这个对手你之前一直输」这类话——
+    而这类话恰恰是玩家最想看的。
+
+    只读已经加载好的全量 `dated`（`records()` 本来就返回全量），所以**不需要新增
+    持久化状态、也不需要额外查询**。
+
+    返回：
+    - `total_before`：当天之前的对局总数（里程碑用）；
+    - `opponents`：对手名 -> (之前的胜, 之前的负)（复仇／苦主用）；
+    - `commanders`：主将 grpId -> 之前最后一次遇到的毫秒时间戳（久违的主将用）。
+    """
+    before = [r for r in dated
+              if datetime.fromtimestamp(r['start_time'] / 1000).date() < chosen]
+    opponents: dict[str, tuple[int, int]] = {}
+    commanders: dict[str, int] = {}
+    for r in before:
+        name = (r.get('opponent_name') or '').strip()
+        # 只算真人：与「反复遇到的对手」同口径，教学局 AI 不进历史战绩
+        if name and not r.get('is_bot') and 'BotMatch' not in (r.get('event_id') or ''):
+            wins, losses = opponents.get(name, (0, 0))
+            opponents[name] = (wins + (r['my_result'] == 'win'),
+                               losses + (r['my_result'] == 'loss'))
+        for gid in (r.get('commanders') or []):
+            commanders[gid] = max(commanders.get(gid, 0), r['start_time'])
+    return {"total_before": len(before), "opponents": opponents,
+            "commanders": commanders}
+
+
 def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
                  event=None, deck=None, family=None, mode=None, deck_id=None):
     from .stats import event_family, friendly_event, is_constructed_opponent_event
@@ -116,7 +148,7 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
                     if datetime.fromtimestamp(r['start_time']/1000).date() == back]
         for f in highlights(day_rows):
             recent_kinds[f['kind']] += 1
-    facts = highlights(selected, recent_kinds)
+    facts = highlights(selected, recent_kinds, history_context(dated, chosen))
     evidence_ids = {mid for fact in facts for mid in fact['match_ids']}
     from .play_draw import distribution, streaks
     # 查看历史日期时不得泄露之后的连续纪录；日期未知不能擅自放到最前面。

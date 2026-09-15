@@ -278,3 +278,163 @@ def test_assemble_forces_volume_last_even_when_it_scores_higher():
     assert _assemble([volume, blitz], 24, fresh)[0]["kind"] == "blitz"
     # 只有场次可说的日子，它照样当开场（不是被删掉）
     assert [c["kind"] for c in _assemble([volume], 24, fresh)] == ["volume"]
+
+
+# ---------- 需要历史上下文的类别（里程碑／复仇／苦主） ----------
+
+
+def test_milestone_fires_only_when_the_day_crosses_a_round_number():
+    """里程碑只在当天的对局**跨过**整数关口时出现——天天报就没人当回事了。"""
+    rows = [row(i) for i in range(4)]
+    hit = highlights(rows, context={"total_before": 98})    # 98 -> 102，跨过 100
+    ms = next(f for f in hit if f['kind'] == 'milestone')
+    assert ms['level'] == 'legendary' and '100' in ms['text']
+    # 没跨关口：103 -> 107 不含任何关口，不该出现
+    # （注意 99 -> 103 **是**跨过 100 的，选例子时踩过这个坑）
+    assert all(f['kind'] != 'milestone'
+               for f in highlights(rows, context={"total_before": 103}))
+    # 没有上下文时也不能崩，只是不出里程碑
+    assert all(f['kind'] != 'milestone' for f in highlights(rows))
+
+
+def test_revenge_needs_a_losing_record_and_a_win_today():
+    """复仇 = 之前交手明显劣势（负 ≥2 且负 > 胜），今天赢了。"""
+    # 必须 ≥2 场：单场走的是 `if n == 1` 的 early-return 分支，测不到这些类别
+    def pair(result):
+        rs = [row(0, result=result), row(1, result='loss' if result == 'win' else 'win')]
+        rs[0]['opponent_name'] = '宿敌'
+        rs[1]['opponent_name'] = '路人'
+        return rs
+
+    rows = pair('win')
+    ctx = {"opponents": {"宿敌": (0, 3)}}
+    rep = next(f for f in highlights(rows, context=ctx) if f['kind'] == 'revenge')
+    assert '宿敌' in rep['text'] and rep['n'] == 1
+
+    # 今天输给同一个人的话不是复仇（那是苦主）
+    assert all(f['kind'] != 'revenge' for f in highlights(pair('loss'), context=ctx))
+
+    # 之前交手占优（胜多于负）不算「旧账」
+    ahead = pair('win')
+    assert all(f['kind'] != 'revenge'
+               for f in highlights(ahead, context={"opponents": {"宿敌": (3, 1)}}))
+    # 只输过 1 次也不够
+    assert all(f['kind'] != 'revenge'
+               for f in highlights(ahead, context={"opponents": {"宿敌": (0, 1)}}))
+
+
+def test_nemesis_needs_never_beaten():
+    """苦主 = 从没赢过的对手（负 ≥3、胜 0），今天又输了。"""
+    rows = [row(0, result='loss'), row(1, result='win')]
+    rows[0]['opponent_name'] = '克星'
+    rows[1]['opponent_name'] = '路人'
+    nem = next(f for f in highlights(rows, context={"opponents": {"克星": (0, 4)}})
+               if f['kind'] == 'nemesis')
+    assert '克星' in nem['text']
+    # 赢过 1 次就不算「从没赢过」
+    assert all(f['kind'] != 'nemesis'
+               for f in highlights(rows, context={"opponents": {"克星": (1, 4)}}))
+    # 只输 2 次不够
+    assert all(f['kind'] != 'nemesis'
+               for f in highlights(rows, context={"opponents": {"克星": (0, 2)}}))
+
+
+def test_history_context_excludes_ai_opponents():
+    """历史战绩只算真人——教学局的 AI 对手不进「复仇／苦主」的分母。
+
+    与「反复遇到的对手」同口径：`is_bot`（按自己套牌名打的标记）与 `AIBotMatch`
+    （教学局，Sparky 那类）都要排除。
+    """
+    from datetime import date
+    from app.insights import history_context
+
+    def m(i, name, result, bot=0, event='Play_Brawl_Historic'):
+        return dict(match_id=str(i), start_time=i, opponent_name=name,
+                    my_result=result, is_bot=bot, event_id=event, commanders=[])
+
+    dated = [m(0, '真人', 'loss'), m(1, '真人', 'loss'),
+             m(2, 'Sparky', 'loss', event='AIBotMatch'),
+             m(3, 'BotFarm', 'loss', bot=1)]
+    ctx = history_context(dated, date(1970, 1, 2))
+    assert ctx['total_before'] == 4
+    assert ctx['opponents'] == {'真人': (0, 2)}, ctx['opponents']
+
+
+# ---------- 需要历史上下文的类别（里程碑／复仇／苦主） ----------
+
+
+def test_milestone_fires_only_when_the_day_crosses_a_round_number():
+    """里程碑只在当天的对局**跨过**整数关口时出现——天天报就没人当回事了。"""
+    rows = [row(i) for i in range(4)]
+    hit = highlights(rows, context={"total_before": 98})    # 98 -> 102，跨过 100
+    ms = next(f for f in hit if f['kind'] == 'milestone')
+    assert ms['level'] == 'legendary' and '100' in ms['text']
+    # 没跨关口：103 -> 107 不含任何关口，不该出现
+    # （注意 99 -> 103 **是**跨过 100 的，选例子时踩过这个坑）
+    assert all(f['kind'] != 'milestone'
+               for f in highlights(rows, context={"total_before": 103}))
+    # 没有上下文时也不能崩，只是不出里程碑
+    assert all(f['kind'] != 'milestone' for f in highlights(rows))
+
+
+def test_revenge_needs_a_losing_record_and_a_win_today():
+    """复仇 = 之前交手明显劣势（负 ≥2 且负 > 胜），今天赢了。"""
+    # 必须 ≥2 场：单场走的是 `if n == 1` 的 early-return 分支，测不到这些类别
+    def pair(result):
+        rs = [row(0, result=result), row(1, result='loss' if result == 'win' else 'win')]
+        rs[0]['opponent_name'] = '宿敌'
+        rs[1]['opponent_name'] = '路人'
+        return rs
+
+    rows = pair('win')
+    ctx = {"opponents": {"宿敌": (0, 3)}}
+    rep = next(f for f in highlights(rows, context=ctx) if f['kind'] == 'revenge')
+    assert '宿敌' in rep['text'] and rep['n'] == 1
+
+    # 今天输给同一个人的话不是复仇（那是苦主）
+    assert all(f['kind'] != 'revenge' for f in highlights(pair('loss'), context=ctx))
+
+    # 之前交手占优（胜多于负）不算「旧账」
+    ahead = pair('win')
+    assert all(f['kind'] != 'revenge'
+               for f in highlights(ahead, context={"opponents": {"宿敌": (3, 1)}}))
+    # 只输过 1 次也不够
+    assert all(f['kind'] != 'revenge'
+               for f in highlights(ahead, context={"opponents": {"宿敌": (0, 1)}}))
+
+
+def test_nemesis_needs_never_beaten():
+    """苦主 = 从没赢过的对手（负 ≥3、胜 0），今天又输了。"""
+    rows = [row(0, result='loss'), row(1, result='win')]
+    rows[0]['opponent_name'] = '克星'
+    rows[1]['opponent_name'] = '路人'
+    nem = next(f for f in highlights(rows, context={"opponents": {"克星": (0, 4)}})
+               if f['kind'] == 'nemesis')
+    assert '克星' in nem['text']
+    # 赢过 1 次就不算「从没赢过」
+    assert all(f['kind'] != 'nemesis'
+               for f in highlights(rows, context={"opponents": {"克星": (1, 4)}}))
+    # 只输 2 次不够
+    assert all(f['kind'] != 'nemesis'
+               for f in highlights(rows, context={"opponents": {"克星": (0, 2)}}))
+
+
+def test_history_context_excludes_ai_opponents():
+    """历史战绩只算真人——教学局的 AI 对手不进「复仇／苦主」的分母。
+
+    与「反复遇到的对手」同口径：`is_bot`（按自己套牌名打的标记）与 `AIBotMatch`
+    （教学局，Sparky 那类）都要排除。
+    """
+    from datetime import date
+    from app.insights import history_context
+
+    def m(i, name, result, bot=0, event='Play_Brawl_Historic'):
+        return dict(match_id=str(i), start_time=i, opponent_name=name,
+                    my_result=result, is_bot=bot, event_id=event, commanders=[])
+
+    dated = [m(0, '真人', 'loss'), m(1, '真人', 'loss'),
+             m(2, 'Sparky', 'loss', event='AIBotMatch'),
+             m(3, 'BotFarm', 'loss', bot=1)]
+    ctx = history_context(dated, date(1970, 1, 2))
+    assert ctx['total_before'] == 4
+    assert ctx['opponents'] == {'真人': (0, 2)}, ctx['opponents']

@@ -833,11 +833,11 @@ drama = 稀有度 × 分量 × 新鲜度 × 个人相关度
 
 三件事都查实了，但都需要用户决定，所以**没有动**：
 
-1. **`POST /api/deck_tag` 是个没接线的接口**。它能手动改某一场的 `my_deck_tag`（「手动打标
-   自己套牌名」），但：前端无任何调用（`window.open`／`fetch`／`api()` 三种写法都找过）、
-   测试无覆盖、本文档此前也没描述过。**要么删掉，要么接一个「改套牌名」的 UI**——需要用户定。
+1. ~~**`POST /api/deck_tag` 是个没接线的接口**~~ —— **2026-09-16 按用户确认删掉了**。
+   它能手动改某一场的 `my_deck_tag`（「手动打标自己套牌名」），但前端无任何调用
+   （`window.open`／`fetch`／`api()` 三种写法都找过）、测试无覆盖、本文档也没描述过。
    同类的 `POST /api/retry_boot` 与 `POST /api/card_names_seed` 都在 2026-09-14 补上了 UI，
-   只有它还是孤立的。
+   只有它是孤立的，所以按「死代码就删」的一贯口径删除。
 2. **`2021-12-11` 的 273 场 `source='untapped'` 导入异常日**（191 个对手各 4–6 场、几乎全负、
    平均 33 秒 vs 全库 Untapped 平均 403 秒、跨 24 小时）。它混在全史统计里约 2.5%。
    **没有按规则剔除**——「哪一天的数据不可信」该由用户判断，不该由代码悄悄决定。
@@ -858,3 +858,41 @@ drama = 稀有度 × 分量 × 新鲜度 × 个人相关度
 **结论：360ms 是既有开销，不是本轮引入的**（`/api/commanders` 也是 360ms，而它本轮没被改过）。
 页面用 `Promise.allSettled` 并行取，总等待 <400ms，本地单用户面板够用，**暂不优化**
 （缓存 `records()` 要处理摄入期间的失效，收益不抵风险）。
+
+## 对局结果丢失（2026-09-16 修的真 BUG）
+
+**现象**：用户报「今天有一局比赛打完了也没有确认结果」——2026-09-16 17:57 的一场对局在页面上
+永远停在「待确认」，先后手也是 `–`。
+
+**排查过程**（值得记，因为**每一步都在推翻假设**）：
+1. 库里那行 `my_result / play_draw / end_reason / total_turns / duration_sec` **全为 NULL**，
+   但有一条占位 game 行——典型的「创建了、没闭合」。
+2. 原始日志里**有**完整的 `MatchGameRoomStateType_MatchCompleted`：`finalMatchResult`
+   带 `matchId`、`resultList` 两条（`MatchScope_Game` / `MatchScope_Match`）、
+   `winningTeamId=1`、`ResultReason_Concede`。**数据是齐的。**
+3. 用真实 `my_player_id` 把这两条事件喂进 `SessionBuilder` → **结果正确**（`win`）。
+4. 怀疑「头部行与 JSON 体被 `RecordAssembler` 拆成两条记录」→ 模拟分段喂入 → **仍然正确**。
+5. 怀疑「结果晚于落库」→ 模拟「每喂一条就 `take()` 一次」的慢轮询 → **仍然正确**。
+6. 回头看 `data/panel.log`，发现**面板是 17:57:23 启动的，而这场对局 17:57:16 开始**。
+7. **根因**：启动**回填**看到了开局并落库（所以库里有一行、结果是 NULL）；随后接手的
+   **监听器是全新的 `SessionBuilder`**、从没见过这场；18:01 的 `finalMatchResult` 按
+   matchId 找不到对局 → 进 `_pending_fmr` → **永远消失**。整个路径**没有任何日志、没有计数**，
+   所以从外面看就是「凭空丢了一场的结果」。
+   复现：只把 MatchCompleted 那条喂给一个全新 builder → `take()` 产出 0 场，
+   `_pending_fmr` 里静静躺着 1 条。
+
+**修法**（两层）：
+- `SessionResult` 新增 `orphan_results`：builder 把**认领不了**的结果传出来，不许自己吞掉。
+  `take()` / `close()` 都带上（不清空队列——迟到的开局仍可能把它认领走；重复补写由下面兜住）。
+- `store.apply_orphan_result(conn, match_id, result_list)`：按 id 兜底补写主行的胜负／结束原因
+  与逐局结果。**只在 `my_result IS NULL` 时写**，所以重复调用安全；**没有 `my_seat` 时拒绝猜**
+  （宁可不写也不编结果）。`main.flush()` 调用它，失败会记日志与计数
+  （`_state["orphan_results_fixed" / "orphan_results_failed"]`）。
+
+**自愈路径（已核实）**：`backfill.collect_sources()` 含 `cfg.player_log`，且回填对「仍在增长」
+的文件会**整份重读**（`marks.is_unchanged` 只跳过完全没变的文件）——所以**重启面板就能把
+这类缺结果的行修回来**。已在库副本上验证：`(None, None, None)` → `('win', 'Concede', 10, 'play')`。
+
+**教训**：凡是「按 id 找目标、找不到就放进待确认队列」的逻辑，**必须把找不到这件事暴露出来**
+（传出去或至少记日志）。静默的待确认队列等于静默丢数据，而且排查时会一路指向错误的方向
+（我前面 5 步都在怀疑解析器，而解析器一直是对的）。

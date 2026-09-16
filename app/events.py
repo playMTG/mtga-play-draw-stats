@@ -68,6 +68,11 @@ class SessionResult:
     matches: list[MatchRecord]
     ranks: list[RankSnapshot]
     unparsed_lines: int = 0
+    # 找不到归属的 finalMatchResult（match_id, 载荷）。**必须往外传**：
+    # 面板在对局进行中启动时，启动回填写下了开局行，而接手的监听器是全新 builder、
+    # 没见过这场，结果便无处可路由——以前它只进 _pending_fmr 然后静默消失。
+    # 2026-09-16 实测：一场 17:57 的对局因此永远停在「待确认」。
+    orphan_results: list[tuple[str, dict]] = field(default_factory=list)
 
 
 def _to_int(v) -> int | None:
@@ -494,7 +499,8 @@ class SessionBuilder:
     def close(self) -> SessionResult:
         if self._cur is not None:
             self._close_current()
-        return SessionResult(self.matches, self.ranks, self.unparsed_lines)
+        return SessionResult(self.matches, self.ranks, self.unparsed_lines,
+                             list(self._pending_fmr))
 
     def set_player_id(self, player_id: str | None) -> None:
         """监听中途才探测到身份时补挂；并回填进行中/最近闭合对局的座位。"""
@@ -516,7 +522,7 @@ class SessionBuilder:
         finalMatchResult）的 _last 会在标记时随下轮 take() 重新带上。
         """
         result = SessionResult(list(self.matches), list(self.ranks),
-                               self.unparsed_lines)
+                               self.unparsed_lines, list(self._pending_fmr))
         self.matches = []
         self.ranks = []
         self.unparsed_lines = 0

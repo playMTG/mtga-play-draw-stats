@@ -208,6 +208,89 @@ def _abnormal_flags(duration, total_turns, cfg: Config) -> tuple[int, str | None
     return (0, None)
 
 
+
+def apply_orphan_result(conn: sqlite3.Connection, match_id: str,
+                        result_list: list, source: str = "log") -> bool:
+    """把一个「没人认领」的 finalMatchResult 按 match_id 直接补写进库。
+
+    场景（2026-09-16 实测的真 BUG）：面板在**对局进行中**启动时，启动回填看到开局
+    并落库，随后接手的监听器是**全新的 SessionBuilder**、从没见过这场；18:01 的
+    `finalMatchResult` 便无处可路由，只进 `_pending_fmr` 然后静默消失——那场对局
+    永远停在「待确认」。
+
+    这里按 id 兜底补写：主行的胜负与结束原因、以及逐局结果。
+    **只在库里还没有结果时写**（`my_result IS NULL`），所以重复调用是安全的。
+    胜负靠库里的 `my_seat` 判：本项目的既有假设是 seat == teamId
+    （`events._resolve_players` 里 `my_seat = systemSeatId or teamId`）。
+
+    返回是否真的写了。
+    """
+    row = conn.execute(
+        "SELECT my_seat, my_result FROM matches WHERE match_id=?", (match_id,)
+    ).fetchone()
+    if row is None:
+        return False                     # 这场根本不在库里，交给上层重试/放弃
+    if row["my_result"] is not None:
+        return False                     # 已有结果，不覆盖
+    my_team = row["my_seat"]
+    if my_team is None:
+        return False                     # 没有座位就判不出胜负，宁可不写
+    wrote = False
+    for entry in result_list or []:
+        if not isinstance(entry, dict):
+            continue
+        scope = entry.get("scope")
+        reason = entry.get("reason")
+        reason = str(reason).replace("ResultReason_", "") if reason else None
+        if scope == "MatchScope_Match":
+            wt = _as_int(entry.get("winningTeamId"))
+            if wt is None:
+                continue
+            conn.execute(
+                """UPDATE matches SET my_result=?,
+                          end_reason=COALESCE(end_reason, ?)
+                    WHERE match_id=?""",
+                ("win" if wt == my_team else "loss", reason, match_id),
+            )
+            wrote = True
+        elif scope == "MatchScope_Game":
+            wt = _as_int(entry.get("winningTeamId"))
+            if wt is None:
+                continue
+            # 落在该场第一个还没有结果的局槽上；没有就补一行
+            game = conn.execute(
+                """SELECT id FROM games WHERE match_id=?
+                    AND result IS NULL ORDER BY game_no LIMIT 1""",
+                (match_id,),
+            ).fetchone()
+            result = "win" if wt == my_team else "loss"
+            if game is not None:
+                conn.execute(
+                    "UPDATE games SET result=?, reason=? WHERE id=?",
+                    (result, reason, game["id"]),
+                )
+            else:
+                nxt = conn.execute(
+                    "SELECT COALESCE(MAX(game_no), 0) + 1 FROM games WHERE match_id=?",
+                    (match_id,),
+                ).fetchone()[0]
+                conn.execute(
+                    """INSERT INTO games(match_id, game_no, result, reason)
+                       VALUES(?,?,?,?)""",
+                    (match_id, nxt, result, reason),
+                )
+            wrote = True
+    if wrote:
+        conn.commit()
+    return wrote
+
+
+def _as_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
 def upsert_match(conn: sqlite3.Connection, m: MatchRecord, cfg: Config) -> bool:
     """幂等写入：同 match_id 更新主行并重写子表。返回是否新建档。"""
     duration = None

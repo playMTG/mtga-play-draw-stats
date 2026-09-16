@@ -206,10 +206,23 @@ def _watch_loop_inner() -> None:
 
     def flush() -> None:
         """take 走各 builder 缓冲；每条 SAVEPOINT，失败只回滚该条（R11.3/H2）。"""
+        orphans: list = []
         for sb in builders:
             r = sb.take()
             pending_matches.extend(r.matches)
             pending_ranks.extend(r.ranks)
+            orphans.extend(r.orphan_results)
+        # 无主的 finalMatchResult：面板在**对局进行中**启动时，启动回填写下了开局行，
+        # 而接手的监听器是全新 builder、没见过这场，结果无处可路由（2026-09-16 实测
+        # 一场 17:57 的对局因此永远停在「待确认」）。按 id 兜底补写，只写还没有结果的。
+        for mid, fmr in orphans:
+            try:
+                if store.apply_orphan_result(conn, mid, fmr.get("resultList") or []):
+                    _state["orphan_results_fixed"] = _state.get("orphan_results_fixed", 0) + 1
+                    logsetup.logger().info("按 id 补写了无主结果：%s", mid)
+            except Exception as exc:
+                _state["orphan_results_failed"] = _state.get("orphan_results_failed", 0) + 1
+                logsetup.logger().warning("补写无主结果失败 %s：%s", mid, exc)
         for m in pending_matches:
             try:
                 conn.execute("SAVEPOINT upsert_one")
@@ -798,17 +811,6 @@ def api_opp_tag_by_name(commander: str = Query(...), tag: str = Query("")):
             pass  # 卡名库未挂载时跳过回填
         conn.commit()
         return {"ok": True, "commander": commander, "tags": parts, "tag": raw or None}
-    return q(_set)
-
-
-@app.post("/api/deck_tag")
-def api_deck_tag(match_id: str = Query(...), tag: str = Query("")):
-    """手动打标自己套牌名。"""
-    def _set(conn):
-        conn.execute("UPDATE matches SET my_deck_tag=? WHERE match_id=?",
-                     (tag, match_id))
-        conn.commit()
-        return {"ok": True}
     return q(_set)
 
 

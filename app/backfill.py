@@ -86,6 +86,9 @@ def backfill(cfg: Config, files: list[Path]) -> dict:
     marks = IngestMarks(conn)
     total_new = total_updated = total_skipped = 0
     per_file: list[tuple[str, int, int]] = []
+    # 回填过程中学到的「赛事→套牌」映射，交给调用方补挂到监听器的 builder 上
+    # （2026-09-18：不回传就会丢套牌名，见 events.set_course_decks 的说明）
+    learned_decks: dict = {}
 
     for f in files:
         src_name = f.name
@@ -104,6 +107,7 @@ def backfill(cfg: Config, files: list[Path]) -> dict:
             print(f"!! 读取失败 {f}: {e}", file=sys.stderr)
             continue
         result = sb.close()
+        learned_decks.update(sb.course_decks)
         new = upd = 0
         for m in result.matches:
             if store.upsert_match(conn, m, cfg):
@@ -128,6 +132,7 @@ def backfill(cfg: Config, files: list[Path]) -> dict:
         "updated": total_updated,
         "skipped": total_skipped,
         "stats": st,
+        "course_decks": learned_decks,
         "per_file": per_file,
     }
 

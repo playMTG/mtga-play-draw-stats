@@ -34,6 +34,10 @@ _conn_lock = threading.Lock()
 _boot_lock = threading.Lock()
 _watcher: LogWatcher | None = None
 _watcher_thread: threading.Thread | None = None
+# 监听器的 SessionBuilder 列表。_boot_tasks 回填完要把学到的「赛事→套牌」
+# 映射补挂上去，否则监听器错过开赛前的选牌事件就再也拿不到套牌名
+# （2026-09-18 实测的真 BUG，见 events.set_course_decks）。
+_builders: list = []
 _stop_event = threading.Event()  # 通知后台线程退出（R11.3）
 _state = {
     "watching": False,
@@ -169,6 +173,7 @@ def _watch_loop_inner() -> None:
         _persist_player_id(my_id)
     builders = [SessionBuilder(source="log", my_player_id=my_id)
                 for _ in watchers]
+    _builders[:] = builders
     pending_matches: list = []
     pending_ranks: list = []
     last_detect_attempt = 0.0
@@ -381,6 +386,13 @@ def _boot_tasks() -> None:
             "stats": r.get("stats"),
             "files": len(r.get("per_file") or []),
         }
+        # 把回填学到的「赛事→套牌」映射补挂到监听器上（2026-09-18 修的真 BUG）。
+        # 回填与监听器是两个独立 builder，回填吃掉的选牌事件监听器看不见；
+        # 一旦监听器从选牌之后的水位线起步，那场对局的套牌名就永久丢了。
+        mapping = r.get("course_decks") or {}
+        for sb in _builders:
+            sb.set_course_decks(mapping)
+        _state["boot_course_decks"] = len(mapping)
     except Exception as exc:
         prev = _state.get("boot_error")
         msg = f"backfill:{type(exc).__name__}:{exc}"

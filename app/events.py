@@ -502,6 +502,35 @@ class SessionBuilder:
         return SessionResult(self.matches, self.ranks, self.unparsed_lines,
                              list(self._pending_fmr))
 
+    @property
+    def course_decks(self) -> dict:
+        """赛事 → (套牌名, deck_id, 版本, CommandZone)；启动回填用它给监听器接上状态。"""
+        return dict(self._course_decks)
+
+    def set_course_decks(self, mapping: dict | None) -> None:
+        """把启动回填学到的「赛事→套牌」映射补挂到本 builder 上。
+
+        为什么需要（2026-09-18 实测的真 BUG）：`_course_decks` 只活在 builder 实例里，
+        而**启动回填与监听器是两个独立 builder**（还并发跑）。MTGA 在**开赛前**才发
+        `EventSetDeckV3` / `CourseDeckSummary`，若监听器从那条事件**之后**的水位线开始，
+        就永远学不到这套映射——那场对局便落库成「套牌未记录」。用户报的 09-18 19:19 那场
+        正是如此（面板 19:19:16 重启，选牌在 19:19:08、开赛在 19:19:26）。
+        后三场没事，是因为 MTGA 每场开赛前都会再发一次。
+
+        顺带把**已经建好但还没落库**的对局补上（`_cur`/`_last`）——回填跑完时监听器
+        可能已经建了那场对局，只补映射不改历史记录。
+        """
+        if not mapping:
+            return
+        for event, info in mapping.items():
+            self._course_decks.setdefault(event, info)
+        for m in (self._cur, self._last):
+            if m is not None and m.my_deck_tag is None and m.event_id in self._course_decks:
+                tag, did, ver, _cz = self._course_decks[m.event_id]
+                m.my_deck_tag, m.my_deck_id, m.my_deck_version = tag, did, ver
+                if m is self._last:
+                    self._last_revised = True
+
     def set_player_id(self, player_id: str | None) -> None:
         """监听中途才探测到身份时补挂；并回填进行中/最近闭合对局的座位。"""
         if not player_id or self.my_player_id:

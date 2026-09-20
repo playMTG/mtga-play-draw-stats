@@ -22,6 +22,7 @@ from collections import defaultdict
 
 from .daily_copy import pick
 from .deck_observations import play_draw_streak_observations
+from .limited_runs import best_run, split_runs
 
 SIDE_ZH = {"play": "先手", "draw": "后手"}
 VOLUME_MARATHON = 15
@@ -107,6 +108,10 @@ _THEME = {
     "revenge": "opponent", "nemesis": "opponent",
     "volume": "tempo", "blitz": "tempo", "arc": "tempo",
     "milestone": "history",
+    # 限制赛单轮结果自成一题：它说的是「这轮 draft 打成什么样」，与当天的总胜率
+    # （result）、先后手（side）不是同一件事，不该互相挤掉——一个 4 胜卷掉的轮抓
+    # 和「今天手热」完全可以同时出现在同一条评语里。
+    "limited_run": "limited",
 }
 
 # 每个类别的「分量」基准。数值只用于横向比较，不必有绝对含义。
@@ -118,6 +123,17 @@ _WEIGHT = {
     "repeat_commander": 0.85, "arc": 0.8, "rare_commander": 0.75,
     "pd_skew": 0.6, "blitz": 0.5, "volume": 0.25,
 }
+
+# 限制赛单轮结果的档位权重与色条级别（档位名见 `limited_runs.BANDS`）。
+# 分量不写进 `_WEIGHT`：那是以 `kind` 为键的，而这里同一 `kind` 要按档位分档
+# （候选自带 `weight`，`_drama` 优先用它）。定档依据：
+# - `cap`（卷了）压过 hot_wr：一轮真正打满是当天最硬的事实，配 legendary 色条；
+# - `near`／`even` 是「差一点」「刚好回本」，跟高胜率同量级；
+# - `low`／`bust` 是坏消息，权重压低——否则「今天手热」会被「这轮没回本」挤掉，
+#   而前者才是当天更该说的事。实测档位分布 low 121 ／ even 48 ／ cap 37 ／
+#   bust 23 ／ near 17（246 轮，887 个有对局的日子），都属稀有档。
+_LIMITED_WEIGHT = {"cap": 1.15, "near": 1.05, "even": 0.95, "bust": 0.7, "low": 0.6}
+_LIMITED_LEVEL = {"cap": "legendary", "near": "rare"}
 
 # 里程碑的整数关口。刻意稀疏——每一关都报就没人在意了。
 MILESTONES = (100, 250, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000,
@@ -153,6 +169,10 @@ def _drama(c: dict, n: int, recent_kinds: dict[str, int]) -> float:
     if isinstance(prob, (int, float)) and 0 < prob < 1:
         rarity = min(1.0 / prob, 50.0) ** 0.5
     base = _WEIGHT.get(c["kind"], 0.5)
+    if c.get("weight") is not None:
+        # 候选自带分量时以它为准：限制赛单轮结果的「分量」由档位决定，
+        # 而 kind 只有一个（`limited_run`），所以权重挂在候选上而不是表里。
+        base = c["weight"]
     evidence = 1.0 + 0.12 * math.log(1 + max(c.get("n") or 0, 0))
     seen = recent_kinds.get(c["kind"], 0)
     freshness = 1.0 / (1 + 0.6 * min(seen, 3))   # 最多降到 0.36 倍，不封死
@@ -403,6 +423,32 @@ def highlights(rows, recent_kinds: dict[str, int] | None = None,
     if len(blitz) >= 3:
         add("blitz", pick("blitz", [r["match_id"] for r in blitz], n=len(blitz)),
             blitz, n)
+
+    # ---- 限制赛单轮结果（2026-09-20，用户口径「轮抓的评语要优化」）----
+    # 一次 draft／现开打完（打满胜场上限或吃满负场）就说这一轮：卷了／差一把卷／
+    # 回了／没回本／白给。上限与「回本」线在 `limited_runs.py`（按奖励表核验过）。
+    #
+    # 只认**已打完**的一轮：半途的 2-1 不进评语——宁可不说，也不能把中途成绩
+    # 说成一轮的结果。跨天的一轮（昨天开、今天收）由 `insights.daily_report`
+    # 用全量记录切好后经 `context["limited_runs"]` 传进来；没有 context 的调用者
+    # （测试、最近 7 天的重算）退回按当天那几行切，代价是可能漏掉跨天的一轮。
+    # 一天多轮时只评最亮的一轮（已知简化，见 DESIGN）。
+    runs = context["limited_runs"] if "limited_runs" in context else split_runs(rows)
+    run = best_run(runs)
+    if run:
+        key = f"limited_{run['band']}"
+        if run["perfect"] and run["band"] == "cap":
+            key += "_perfect"      # 无败卷掉（0 负只可能出现在打满的那一轮）
+        add(
+            "limited_run",
+            pick(key, run["match_ids"] + [key], event=run["label"], wins=run["wins"],
+                 losses=run["losses"], cap=run["cap"]),
+            run["rows"],
+            n,
+            level=_LIMITED_LEVEL.get(run["band"]),
+            weight=_LIMITED_WEIGHT.get(run["band"], 0.6),
+            band=run["band"],
+        )
 
     # ---- 里程碑：当天的对局跨过整数关口 ----
     # 「第 N 场」是玩家真正会记住的东西，而且**天然稀有**（只在关口那天出现），

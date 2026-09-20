@@ -1,5 +1,5 @@
 """全赛制本地战报。未知字段不当作零，比较窗口与历史基线不重叠。"""
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 import math
 import sqlite3
@@ -138,6 +138,13 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
     constructed = [r for r in selected if is_constructed_opponent_event(r['event_id'])]
     tags = Counter(r['opp_archetype_tag'] for r in constructed if r.get('opp_archetype_tag'))
     from .daily_highlights import highlights
+    from .limited_runs import split_runs
+    # 限制赛单轮结果（「这轮轮抓卷了／差一把／回本」）按**这一轮打完的那天**归日：
+    # 昨天开、今天收的一轮算今天打完的，所以切分用全量 `dated` 而不是当天那几行。
+    # 只跑一次（1 万行切分是毫秒级），不新增持久化状态——与 `history_context` 同一思路。
+    runs_by_day = defaultdict(list)
+    for run in split_runs(dated):
+        runs_by_day[datetime.fromtimestamp(run['end_time']/1000).date()].append(run)
     # 新鲜度降权（今日评价 v2，见 DESIGN.md）：把最近 7 天的对局重算一遍候选，
     # 统计各 kind 出现过几次，交给选材引擎降权——这是治「天天同一句」的关键。
     # 不需要新增持久化状态，7 天的行本来就在 `dated` 里。
@@ -146,9 +153,11 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
         back = chosen - timedelta(days=offset)
         day_rows = [r for r in dated
                     if datetime.fromtimestamp(r['start_time']/1000).date() == back]
-        for f in highlights(day_rows):
+        for f in highlights(day_rows, context={'limited_runs': runs_by_day.get(back, [])}):
             recent_kinds[f['kind']] += 1
-    facts = highlights(selected, recent_kinds, history_context(dated, chosen))
+    facts = highlights(selected, recent_kinds,
+                       {**history_context(dated, chosen),
+                        'limited_runs': runs_by_day.get(chosen, [])})
     evidence_ids = {mid for fact in facts for mid in fact['match_ids']}
     from .play_draw import distribution, streaks
     # 查看历史日期时不得泄露之后的连续纪录；日期未知不能擅自放到最前面。

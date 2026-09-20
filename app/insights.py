@@ -113,15 +113,64 @@ def history_context(dated, chosen):
             "commanders": commanders}
 
 
+_RANGE_LABEL = {"today": "今天", "yesterday": "昨天", "week": "本周", "month": "本月"}
+
+
+def _range_plain(range_key, summary, days, pd):
+    """周／月范围的战报正文（一句话汇总）。
+
+    单日那套「开场 → 转折」选材引擎是按天写的：模板里全是「今天」，套到一周上
+    会说错话（「今天几乎全胜」），所以范围报告**不跑 `highlights`**——只给总量与
+    先后手两个胜率，剩下的去下方明细看（用户口径：页面要少而准）。
+    """
+    label = _RANGE_LABEL.get(range_key, "所选范围")
+    if not summary['n']:
+        return f"{label}在当前筛选下没有已记录对局。"
+    parts = [f"{label} {days} 天有对局，共 {summary['n']} 场 · "
+             f"{summary['wins']} 胜 {summary['losses']} 负 · "
+             f"胜率 {summary['win_rate']['wr']}%"]
+    sides = [f"{side}胜率 {pd[key]['wr']}%（{pd[key]['n']} 场）"
+             for side, key in (("先手", "play_wr"), ("后手", "draw_wr"))
+             if pd[key]['n']]
+    if sides:
+        parts.append("，".join(sides))
+    return "；".join(parts) + "。"
+
+
 def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
-                 event=None, deck=None, family=None, mode=None, deck_id=None):
-    from .stats import event_family, friendly_event, is_constructed_opponent_event
+                 event=None, deck=None, family=None, mode=None, deck_id=None,
+                 range_key=None):
+    """战报。`day` 是单日；`range_key` 是范围关键词（`week`/`month`/…，见
+    `stats.range_bounds`），两者互斥、`range_key` 优先。
+
+    范围与单日共用同一套装配，只有三处不同：
+    ① 选中的行是 `[起, 止]` 闭区间而不是一天；
+    ② 比较基线取**范围之前**的 30 天，与所选范围不重叠（`history_summary` 的
+       口径要求，与单日的「所选日期之前 30 天」一致）；
+    ③ 不跑 `highlights`，正文换成 `_range_plain` 的汇总句。
+    响应里回一个 `range`，前端据此判断「不要拿 `date` 回写日期控件」——
+    范围报告的 `date` 是范围的**最后一天**，不是用户选中的某一天。
+
+    HTTP 层的参数名是 `range`，这里叫 `range_key`：本函数内要用内建 `range()`
+    （新鲜度降权那段），参数一叫 `range` 就会把它盖掉。
+    """
+    from .stats import (event_family, friendly_event, is_constructed_opponent_event,
+                        range_bounds)
     today = datetime.now().date()
-    chosen = datetime.strptime(day, '%Y-%m-%d').date() if day else today
+    if range_key:
+        lo, hi = range_bounds(range_key, today)
+    else:
+        lo = hi = datetime.strptime(day, '%Y-%m-%d').date() if day else today
+    single = lo == hi
+    chosen = hi          # 「截至」语义都挂在范围末
     rows = records(conn, exclude_abnormal, exclude_bot, event, deck, family, mode, deck_id)
     dated = [r for r in rows if r['start_time'] is not None]
-    dates = Counter(datetime.fromtimestamp(r['start_time']/1000).date().isoformat() for r in dated)
-    selected = [r for r in dated if datetime.fromtimestamp(r['start_time']/1000).date() == chosen]
+
+    def _day(r):
+        return datetime.fromtimestamp(r['start_time'] / 1000).date()
+
+    dates = Counter(_day(r).isoformat() for r in dated)
+    selected = [r for r in dated if lo <= _day(r) <= hi]
     summary = aggregate(selected)
     groups = []
     for ev in sorted({r['event_id'] or '' for r in selected}):
@@ -129,47 +178,53 @@ def daily_report(conn, day=None, exclude_abnormal=True, exclude_bot=True,
         groups.append({'event': ev, 'label': friendly_event(ev), 'family': event_family(ev),
                        **aggregate(group)})
     from .comparisons import compare, summarize_by_event
-    history = [r for r in dated if chosen-timedelta(days=30) <= datetime.fromtimestamp(r['start_time']/1000).date() < chosen]
+    history = [r for r in dated if lo-timedelta(days=30) <= _day(r) < lo]
     comparison = compare(selected, history)
     history_summary = summarize_by_event(comparison)
     modes = [{'mode': mode, **aggregate([r for r in selected if r['match_mode']==mode])}
              for mode in ('BO1','BO3','未知') if any(r['match_mode']==mode for r in selected)]
-    comparison['baseline_window'] = '所选日期之前 30 个自然日（不含当天）'
+    comparison['baseline_window'] = ('所选日期之前 30 个自然日（不含当天）' if single
+                                     else '所选范围之前 30 个自然日（不含该范围）')
     constructed = [r for r in selected if is_constructed_opponent_event(r['event_id'])]
     tags = Counter(r['opp_archetype_tag'] for r in constructed if r.get('opp_archetype_tag'))
     from .daily_highlights import highlights
     from .limited_runs import split_runs
+    from .play_draw import distribution, streaks
     # 限制赛单轮结果（「这轮轮抓卷了／差一把／回本」）按**这一轮打完的那天**归日：
     # 昨天开、今天收的一轮算今天打完的，所以切分用全量 `dated` 而不是当天那几行。
     # 只跑一次（1 万行切分是毫秒级），不新增持久化状态——与 `history_context` 同一思路。
     runs_by_day = defaultdict(list)
     for run in split_runs(dated):
         runs_by_day[datetime.fromtimestamp(run['end_time']/1000).date()].append(run)
-    # 新鲜度降权（今日评价 v2，见 DESIGN.md）：把最近 7 天的对局重算一遍候选，
-    # 统计各 kind 出现过几次，交给选材引擎降权——这是治「天天同一句」的关键。
-    # 不需要新增持久化状态，7 天的行本来就在 `dated` 里。
-    recent_kinds = Counter()
-    for offset in range(1, 8):
-        back = chosen - timedelta(days=offset)
-        day_rows = [r for r in dated
-                    if datetime.fromtimestamp(r['start_time']/1000).date() == back]
-        for f in highlights(day_rows, context={'limited_runs': runs_by_day.get(back, [])}):
-            recent_kinds[f['kind']] += 1
-    facts = highlights(selected, recent_kinds,
-                       {**history_context(dated, chosen),
-                        'limited_runs': runs_by_day.get(chosen, [])})
+    if single:
+        # 新鲜度降权（今日评价 v2，见 DESIGN.md）：把最近 7 天的对局重算一遍候选，
+        # 统计各 kind 出现过几次，交给选材引擎降权——这是治「天天同一句」的关键。
+        # 不需要新增持久化状态，7 天的行本来就在 `dated` 里。
+        recent_kinds = Counter()
+        for offset in range(1, 8):
+            back = chosen - timedelta(days=offset)
+            day_rows = [r for r in dated if _day(r) == back]
+            for f in highlights(day_rows, context={'limited_runs': runs_by_day.get(back, [])}):
+                recent_kinds[f['kind']] += 1
+        facts = highlights(selected, recent_kinds,
+                           {**history_context(dated, chosen),
+                            'limited_runs': runs_by_day.get(chosen, [])})
+        plain = ' '.join(f['text'] for f in facts) if facts else (
+            '这一天在当前筛选下没有已记录对局。' if not selected else '')
+    else:
+        facts = []
+        plain = _range_plain(range_key, summary, len({_day(r) for r in selected}),
+                             distribution(selected))
     evidence_ids = {mid for fact in facts for mid in fact['match_ids']}
-    from .play_draw import distribution, streaks
     # 查看历史日期时不得泄露之后的连续纪录；日期未知不能擅自放到最前面。
-    through_day = [r for r in rows if r['start_time'] is None or datetime.fromtimestamp(r['start_time']/1000).date() <= chosen]
-    return {'date': chosen.isoformat(), 'is_today': chosen == today,
+    through_day = [r for r in rows if r['start_time'] is None or _day(r) <= chosen]
+    return {'date': chosen.isoformat(), 'range': range_key, 'is_today': chosen == today,
             'play_draw': {'day': distribution(selected), 'day_streaks': streaks(selected),
                           'history_streaks': streaks(through_day)},
             'summary': summary,
             # 有对局但没有亮点时留空：旧版会补一句「已记录 N 场，X 胜 Y 负」，
             # 而那个数字下方统计卡已逐项列出（用户反馈为无意义复读）。
-            'plain': ' '.join(f['text'] for f in facts) if facts
-                     else ('这一天在当前筛选下没有已记录对局。' if not selected else ''),
+            'plain': plain,
             'events': groups,
             'highlights': facts,
             'highlight_records': [{k: r[k] for k in ('match_id','start_time','event_id','event_label','my_deck_tag','play_draw','my_result','commander_names','commander_cards')} for r in selected if r['match_id'] in evidence_ids],

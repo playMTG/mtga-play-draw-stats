@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .event_names import friendly_event
@@ -51,6 +51,49 @@ def wr(wins: int, n: int) -> dict:
 
 
 _BASE_WHERE = "my_result IS NOT NULL"
+
+# 所有时间范围判断都按**本地日**比较（面板是给自己复盘用的，跨时区没有意义）。
+_RANGE_COL = "date(start_time/1000,'unixepoch','localtime')"
+
+# 相对关键词。`all`/空串表示不过滤。
+RANGE_KEYWORDS = ("all", "today", "yesterday", "week", "month")
+
+
+def range_bounds(value: str | None, today: date | None = None
+                 ) -> tuple[date, date] | None:
+    """把时间范围参数解析成闭区间 `(起, 止)`（本地日期）。`all`/空 → None。
+
+    取值是 `today`/`yesterday`/`week`/`month` 之一，或一个 `YYYY-MM-DD` 具体日期。
+    **本周从周一起算**（与 `trend_weekly` 的分组口径一致），止于今天——
+    本周后面的日子还没有对局，写成周日的闭区间与写到今天等价。
+
+    `today` 可注入，方便测试固定「今天」；非法取值抛 `ValueError`。
+    """
+    if not value or value == "all":
+        return None
+    ref = today or datetime.now().date()
+    if value == "today":
+        return ref, ref
+    if value == "yesterday":
+        back = ref - timedelta(days=1)
+        return back, back
+    if value == "week":
+        return ref - timedelta(days=ref.weekday()), ref
+    if value == "month":
+        return ref.replace(day=1), ref
+    day = datetime.strptime(value, "%Y-%m-%d").date()
+    return day, day
+
+
+def range_cond(value: str | None, today: date | None = None) -> tuple[str, list]:
+    """时间范围过滤条件，配合 `range_bounds` 使用。不过滤时返回 `("", [])`。"""
+    bounds = range_bounds(value, today)
+    if bounds is None:
+        return "", []
+    lo, hi = bounds
+    if lo == hi:
+        return f"{_RANGE_COL} = ?", [lo.isoformat()]
+    return f"{_RANGE_COL} BETWEEN ? AND ?", [lo.isoformat(), hi.isoformat()]
 
 
 def event_family(event_id: str) -> str:
@@ -116,13 +159,66 @@ def _filters(conn: sqlite3.Connection, event: str | None, deck: str | None,
     return conds, args
 
 
+def _totals(conn: sqlite3.Connection, conds: list[str], args: list) -> dict:
+    """总场次与先后手拆分（`overview` 的「所选范围」与「今天」两块共用一套口径）。
+
+    与前端那三张卡一一对应：`total` → 胜率卡，`play_draw_rates` → 先后手率，
+    `on_play`/`on_draw` → 两行胜率。口径与 `insights.aggregate` 一致
+    （分母只算有胜负的对局），改这里等于同时改两处，别单独动。
+    """
+    where = " AND ".join([_BASE_WHERE] + conds)
+    total = conn.execute(
+        f"SELECT SUM(my_result='win') w, COUNT(*) n FROM matches WHERE {where}",
+        args,
+    ).fetchone()
+    pd = conn.execute(
+        f"SELECT play_draw, SUM(my_result='win') w, COUNT(*) n "
+        f"FROM matches WHERE {where} AND play_draw IS NOT NULL "
+        f"GROUP BY play_draw",
+        args,
+    ).fetchall()
+    play = next((r for r in pd if r["play_draw"] == "play"), None)
+    draw = next((r for r in pd if r["play_draw"] == "draw"), None)
+    pn, dn = (play['n'] if play else 0), (draw['n'] if draw else 0)
+    return {
+        "play_draw_rates": {'play': pn, 'draw': dn, 'unknown': total['n']-pn-dn,
+                            'play_rate': round(100*pn/(pn+dn),1) if pn+dn else None,
+                            'draw_rate': round(100*dn/(pn+dn),1) if pn+dn else None},
+        "total": wr(total["w"] or 0, total["n"]),
+        "on_play": wr(play["w"], play["n"]) if play else wr(0, 0),
+        "on_draw": wr(draw["w"], draw["n"]) if draw else wr(0, 0),
+    }
+
+
 def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
              event: str | None = None, deck: str | None = None,
              exclude_bot: bool = True, family: str | None = None,
-             mode: str | None = None, deck_id: str | None = None) -> dict:
-    """总览：整体与先后手拆分 + 按赛事/套牌分组 + 趋势（按日）。"""
+             mode: str | None = None, deck_id: str | None = None,
+             range_key: str = "all", today: date | None = None) -> dict:
+    """总览：整体与先后手拆分 + 按赛事/套牌分组 + 趋势（按日）。
+
+    `range_key` 收窄统计范围（`today`/`yesterday`/`week`/`month`/`all`，或一个具体
+    日期，见 `range_cond`）——顶部那排「今天/本周/本月/总对局」按钮就是它。
+    `by_event`/`by_deck`/`trend_*` 与那三张卡同口径，一起收窄。
+
+    另外单给一块 `today`，**恒为今天、不受范围影响**：三张卡下面那行
+    「今日…」要的是「今天」而不是「所选范围」——范围选到「本周」时上面一行是
+    本周、下面一行仍是今天。两者分开算，前端不必为今天再发一次请求。
+
+    HTTP 层的参数名是 `range`，这里叫 `range_key`：本模块大量用内建 `range()`
+    （`match_list` 里就这么踩过一次——参数一叫 `range`，分页循环直接
+    `TypeError: 'NoneType' object is not callable`）。别为了好看改回去。
+
+    `today` 参数可注入，方便测试固定「今天」。
+    """
+    ref = today or datetime.now().date()
     conds, args = _filters(conn, event, deck, family, mode, deck_id=deck_id)
     stat_conds = list(conds)
+    stat_args = list(args)
+    rcond, rargs = range_cond(range_key, ref)
+    if rcond:
+        conds.append(rcond)
+        args = args + rargs
     if exclude_abnormal:
         conds.append("is_abnormal = 0")
     if exclude_bot:
@@ -133,25 +229,14 @@ def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
     hidden = 0
     if exclude_abnormal or exclude_bot:
         hwhere = " AND ".join(
-            [_BASE_WHERE] + stat_conds + ["(is_abnormal = 1 OR is_bot = 1)"]
+            [_BASE_WHERE] + stat_conds + ([rcond] if rcond else [])
+            + ["(is_abnormal = 1 OR is_bot = 1)"]
         )
         hidden = conn.execute(
-            f"SELECT COUNT(*) FROM matches WHERE {hwhere}", args
+            f"SELECT COUNT(*) FROM matches WHERE {hwhere}", stat_args + rargs
         ).fetchone()[0]
 
-    total = conn.execute(
-        f"SELECT SUM(my_result='win') w, COUNT(*) n FROM matches WHERE {where}",
-        args,
-    ).fetchone()
-
-    pd = conn.execute(
-        f"SELECT play_draw, SUM(my_result='win') w, COUNT(*) n "
-        f"FROM matches WHERE {where} AND play_draw IS NOT NULL "
-        f"GROUP BY play_draw",
-        args,
-    ).fetchall()
-    play = next((r for r in pd if r["play_draw"] == "play"), None)
-    draw = next((r for r in pd if r["play_draw"] == "draw"), None)
+    totals = _totals(conn, conds, args)
 
     by_event = conn.execute(
         f"SELECT COALESCE(event_id, '(unknown)') k, "
@@ -185,15 +270,18 @@ def overview(conn: sqlite3.Connection, exclude_abnormal: bool = True,
         args,
     ).fetchall()
 
-    pn, dn = (play['n'] if play else 0), (draw['n'] if draw else 0)
+    tcond, targs = range_cond("today", ref)
+    tconds = stat_conds + [tcond]
+    if exclude_abnormal:
+        tconds.append("is_abnormal = 0")
+    if exclude_bot:
+        tconds.append("is_bot = 0")
+
     return {
-        "play_draw_rates": {'play': pn, 'draw': dn, 'unknown': total['n']-pn-dn,
-                            'play_rate': round(100*pn/(pn+dn),1) if pn+dn else None,
-                            'draw_rate': round(100*dn/(pn+dn),1) if pn+dn else None},
-        "total": wr(total["w"] or 0, total["n"]),
+        "range": range_key or "all",
+        **totals,
         "hidden": hidden,
-        "on_play": wr(play["w"], play["n"]) if play else wr(0, 0),
-        "on_draw": wr(draw["w"], draw["n"]) if draw else wr(0, 0),
+        "today": _totals(conn, tconds, stat_args + targs),
         "by_event": [{"key": r["k"], "label": friendly_event(r["k"]), **wr(r["w"] or 0, r["n"])} for r in by_event],
         "by_deck": [{"key": r["k"], **wr(r["w"] or 0, r["n"])} for r in by_deck],
         "trend_daily": [{"key": r["d"], **wr(r["w"] or 0, r["n"])} for r in trend],
@@ -553,13 +641,23 @@ def match_list(conn: sqlite3.Connection, exclude_abnormal: bool = True,
                event: str | None = None, deck: str | None = None,
                limit: int = 500, offset: int = 0, lang: str = "zh",
                exclude_bot: bool = True, family: str | None = None, day=None,
-               mode: str | None = None, deck_id: str | None = None) -> dict:
-    """对局明细（倒序），含明确记录的我方／对手主将与诊断字段。"""
+               mode: str | None = None, deck_id: str | None = None,
+               range_key: str | None = None) -> dict:
+    """对局明细（倒序），含明确记录的我方／对手主将与诊断字段。
+
+    `day` 是具体某一天（明细页的日期选择），`range_key` 是关键词范围（`week` 等，
+    见 `range_cond`）——两者都给就是求交。`week` 这类范围只能靠关键词，
+    因为日期控件只能表达「哪一天」，表达不了「哪一周」。
+    """
     base_conds, base_args = _filters(conn, event, deck, family, mode, deck_id=deck_id)
     if day:
         datetime.strptime(day, '%Y-%m-%d')
         base_conds.append("date(start_time/1000,'unixepoch','localtime')=?")
         base_args.append(day)
+    rcond, rargs = range_cond(range_key)
+    if rcond:
+        base_conds.append(rcond)
+        base_args.extend(rargs)
     conds = list(base_conds)
     if exclude_abnormal:
         conds.append("is_abnormal = 0")

@@ -120,9 +120,13 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 
 <!-- 全史与今日的先后手统计放在最顶上、并排显示（用户口径 2026-09-15：
      「这种统计可以移到最顶上，跟今日先后手胜率放一块」）。
-     今日那几行由 loadDaily 填，空日/全部日期时自动留空。 -->
-<div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5D">
-  <div class="card"><h2>全史总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div><div class="ci" id="k-total-today" style="margin-top:4px"></div></div>
+     今日那几行由 loadOverview 填，空日/范围里没有对局时自动留空。 -->
+<div class="bar" style="margin-bottom:10px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5E">
+  <h2 style="margin:0">对局统计</h2>
+  <button id="s-today">今天</button><button id="s-week">本周</button><button id="s-month">本月</button><button id="s-all" class="on">总对局</button>
+</div>
+<div class="grid g3" style="margin-bottom:14px" data-page-node-id="YDTfxm4oCmHFwkEXSFmg5F">
+  <div class="card"><h2 id="k-total-title">全史总胜率</h2><div class="big" id="k-total">–</div><div class="ci" id="k-total-ci"></div><div class="ci" id="k-total-today" style="margin-top:4px"></div></div>
   <div class="card"><h2>先手</h2><div class="big" id="k-play-rate">–</div><div class="ci" id="k-play-rate-note"></div><div class="ci" id="k-play-ci" style="margin-top:4px"></div><div class="ci" id="k-play-today" style="margin-top:4px"></div></div>
   <div class="card"><h2>后手</h2><div class="big" id="k-draw-rate">–</div><div class="ci" id="k-draw-rate-note"></div><div class="ci" id="k-draw-ci" style="margin-top:4px"></div><div class="ci" id="k-draw-today" style="margin-top:4px"></div></div>
 </div>
@@ -131,6 +135,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 <section class="card" style="margin-bottom:14px" data-page-node-id="HdlCFRAXVo1RfPPkLnV6qE">
   <div class="bar"><h2 style="margin:0" data-page-node-id="5D6G08hNtghxgz3AfRTUXJ">每日战报与对局明细</h2>
     <button id="d-today" class="on">今天</button><button id="d-yesterday">昨天</button>
+    <button id="d-week">本周</button>
     <button id="d-all">全部日期</button>
     <input id="d-date" type="date" aria-label="选择日期">
     <span id="daily-asof" class="ci"></span>
@@ -170,7 +175,7 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </div>
 
 <div class="card" style="margin-bottom:14px" data-page-node-id="UN3PNXlDacVJhAPsxiO5r6">
-  <h2 data-page-node-id="mfwUrzXRY0O7XGUhUwlSae">先后手局数分布</h2>
+  <h2 data-page-node-id="mfwUrzXRY0O7XGUhUwlSae">先后手局数分布 <span class="ci" id="pd-dist-scope"></span></h2>
   <div style="display:flex;align-items:center;gap:10px" data-page-node-id="JM2znRVXdNJ64pKWyMKj5w">
     <div id="pd-dist" style="flex:1;display:flex;align-items:center" data-page-node-id="WNAS54nB0Mk6NWpDjSXUVY">–</div>
     <span class="ci" id="pd-dist-txt" style="white-space:nowrap" data-page-node-id="MDVN40bvNTcA7DfwnmJgN8"></span>
@@ -286,6 +291,6 @@ abbr{cursor:help;text-decoration:none;border-bottom:1px dotted var(--muted)}
 </dialog>
 
 <script src="chart.umd.js"></script>
-<script src="app.js?v=0.6.1-top-stats"></script>
+<script src="app.js?v=0.7.0-range-filter"></script>
 </body>
 </html>

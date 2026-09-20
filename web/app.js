@@ -7,7 +7,13 @@ function setHTML(id, html) { const el = typeof id === "string" ? $(id) : id; if 
 function setText(id, text) { const el = typeof id === "string" ? $(id) : id; if (el) el.textContent = text; }
 function setHidden(id, hidden) { const el = typeof id === "string" ? $(id) : id; if (el) el.hidden = !!hidden; }
 const localDay = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-let matchDay = localDay(new Date()), matchLimit = 200, matchOffset = 0;
+// 两个时间范围各管一块、**互不联动**（用户口径 2026-09-20 分别列了两组按钮）：
+//   `statsRange` —— 只管最顶上那三张统计卡（今天/本周/本月/总对局）
+//   `matchRange` —— 只管战报与对局明细（今天/昨天/本周/全部日期/具体某天）
+// 点上面「本周」不会动下面的明细，点下面「昨天」也不会动上面的统计卡。
+let statsRange = "all";                    // all | today | week | month
+let matchRange = localDay(new Date());     // ""（全部日期）| "week" | YYYY-MM-DD
+let matchLimit = 200, matchOffset = 0;
 const fmtTime = (ms) =>
   ms ? new Date(ms).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
 
@@ -96,21 +102,9 @@ function bigCard(id, ciId, w) {
 // 留着的唯一效果是让人以为页面上还有那两张图。现在只有下面两条曲线。
 async function loadOverview() {
   const v = uiVersion;
-  const o = await api("/api/overview");
+  const o = await api("/api/overview", { range: statsRange });
   if (isStale(v)) return;
-  const rates = o.play_draw_rates;
-  $("k-play-rate").textContent = rates.play_rate == null ? "无样本" : `${rates.play_rate}%`;
-  $("k-draw-rate").textContent = rates.draw_rate == null ? "无样本" : `${rates.draw_rate}%`;
-  $("k-play-rate-note").textContent = `先手 ${rates.play} 场 · 后手 ${rates.draw} 场 · 未知 ${rates.unknown} 场`;
-  $("k-draw-rate-note").textContent = "全史 · 当前筛选 · 比例仅含先后手已知的有结果对局";
-  applyFormatFocus(o.format_focus);
-  bigCard("k-total", "k-total-ci", o.total);
-  $("k-play-ci").textContent = o.on_play.n
-    ? `先手胜率 ${o.on_play.wr}% · 95% CI ${o.on_play.lo}–${o.on_play.hi} · ${o.on_play.wins}胜/${o.on_play.n}场`
-    : "";
-  $("k-draw-ci").textContent = o.on_draw.n
-    ? `后手胜率 ${o.on_draw.wr}% · 95% CI ${o.on_draw.lo}–${o.on_draw.hi} · ${o.on_draw.wins}胜/${o.on_draw.n}场`
-    : "";
+  renderTopCards(o);
 
   // 先后手局数分布条：直白展示先手/后手各多少场、各占比例
   const pn = o.on_play.n || 0, dn = o.on_draw.n || 0, known = pn + dn;
@@ -128,6 +122,54 @@ async function loadOverview() {
     dist.innerHTML = `<span class="muted">无样本</span>`;
     $("pd-dist-txt").textContent = "";
   }
+}
+
+/* ---------- 顶部三张统计卡的时间范围（今天/本周/本月/总对局） ---------- */
+// 数字全部来自 `/api/overview` 的**所选范围**那一块；下面那行「今日…」来自同一
+// 响应里的 `today` 块——它恒为今天，所以范围切到「本周」时上面一行是本周、
+// 下面一行仍是今天。范围本来就是「今天」时那行是纯复读，藏起来。
+// 原先「今日…」是 `loadDaily` 用当天的战报填的，于是选「昨天」时那行会拿昨天的
+// 数字自称「今日」——一起改掉了。
+const RANGE_LABEL = { all: "全史", today: "今天", yesterday: "昨天", week: "本周", month: "本月" };
+const rangeLabel = (v) => RANGE_LABEL[v] || v || "全史";
+const isDayString = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "");
+
+function todaySideLine(rate, x, label) {
+  const parts = [`今日${label}率 ${rate ?? "–"}%`];
+  if (x && x.n) parts.push(`${label}胜率 ${x.wr}%（${x.wins} 胜 / ${x.n} 场）`);
+  return parts.join(" · ");
+}
+
+function renderTodayLines(t) {
+  const total = t?.total;
+  const on = !!(total && total.n) && statsRange !== "today";
+  $("k-total-today").textContent = on
+    ? `今日 ${total.wins} 胜 ${total.n - total.wins} 负 · 胜率 ${total.wr ?? "–"}%` : "";
+  $("k-play-today").textContent = on
+    ? todaySideLine(t.play_draw_rates.play_rate, t.on_play, "先手") : "";
+  $("k-draw-today").textContent = on
+    ? todaySideLine(t.play_draw_rates.draw_rate, t.on_draw, "后手") : "";
+}
+
+function renderTopCards(o) {
+  const label = rangeLabel(o.range);
+  $("k-total-title").textContent = `${label}总胜率`;
+  bigCard("k-total", "k-total-ci", o.total);
+  const rates = o.play_draw_rates;
+  $("k-play-rate").textContent = rates.play_rate == null ? "无样本" : `${rates.play_rate}%`;
+  $("k-draw-rate").textContent = rates.draw_rate == null ? "无样本" : `${rates.draw_rate}%`;
+  $("k-play-rate-note").textContent = `先手 ${rates.play} 场 · 后手 ${rates.draw} 场 · 未知 ${rates.unknown} 场`;
+  $("k-draw-rate-note").textContent = `${label} · 当前筛选 · 比例仅含先后手已知的有结果对局`;
+  $("k-play-ci").textContent = o.on_play.n
+    ? `先手胜率 ${o.on_play.wr}% · 95% CI ${o.on_play.lo}–${o.on_play.hi} · ${o.on_play.wins}胜/${o.on_play.n}场`
+    : "";
+  $("k-draw-ci").textContent = o.on_draw.n
+    ? `后手胜率 ${o.on_draw.wr}% · 95% CI ${o.on_draw.lo}–${o.on_draw.hi} · ${o.on_draw.wins}胜/${o.on_draw.n}场`
+    : "";
+  renderTodayLines(o.today);
+  // 分布条跟的是同一份数据，把范围写在标题旁，免得跟下面的全史区块看串
+  $("pd-dist-scope").textContent = label;
+  applyFormatFocus(o.format_focus);
 }
 
 /* ---------- 首页入口：最近在打的套牌（V3 收尾） ---------- */
@@ -464,7 +506,8 @@ function eventMarkup(raw, label) {
 
 async function loadMatches() {
   const v = uiVersion;
-  const m = await api("/api/matches", { limit: matchLimit, offset: matchOffset, ...(matchDay ? {day:matchDay} : {}) });
+  const m = await api("/api/matches", { limit: matchLimit, offset: matchOffset,
+    ...(matchRange === "week" ? { range: "week" } : matchRange ? { day: matchRange } : {}) });
   if (isStale(v)) return;
   $("m-count").textContent = `共 ${m.total} 场（本页 ${m.rows.length} 场，第 ${Math.floor(matchOffset / matchLimit) + 1} 页）`;
   $("m-more").disabled = matchOffset + m.rows.length >= m.total;
@@ -702,12 +745,14 @@ async function loadDeckDetail() {
   }
 }
 
+// 套牌详情里点某一天 → 跳到那天的战报与明细。**不动顶部的统计卡**：
+// 那是另一套范围（`statsRange`），跳一天不该顺手把「总对局」改成某一天。
 function jumpToDaily(day) {
   if (!day) return;
-  matchDay = day;
+  matchRange = day;
   $("d-date").value = day;
   matchOffset = 0;
-  syncMatchDayBtns();
+  syncRangeBtns();
   loadDaily();
   loadMatches();
   const el = $("daily-block") || $("d-date");
@@ -754,55 +799,59 @@ function openDeck(anchor) {
 
 let dailyRequest = 0, dailyScope = "", dailyLatest = null;
 async function loadDaily() {
-  // 「全部日期」下战报无意义（战报是单日口径）：藏起战报区，只留下方明细
-  if (!matchDay) {
+  // 「全部日期」下战报无意义（战报是单日/单段口径）：藏起战报区，只留下方明细。
+  // 顶部那三张卡不归这里管（它们跟的是 `statsRange`），所以不再顺手清空「今日…」。
+  if (!matchRange) {
     dailyScope = "";
     $("daily-block").hidden = true;
     $("daily-all-note").hidden = false;
     $("daily-asof").textContent = "";
-    renderTodayStats(null, null);   // 顶部那三行「今日…」也要清掉，只留全史
     return;
   }
   $("daily-block").hidden = false;
   $("daily-all-note").hidden = true;
   const request = ++dailyRequest;
-  const scope = `${params()}|${matchDay}`;
+  const scope = `${params()}|${matchRange}`;
   if (dailyScope !== scope) {
     $("daily-latest").hidden = true;
     $("daily-plain").textContent = "正在读取本地战报…";
     $("daily-plain").className = "";
     for (const id of ["daily-asof", "daily-pd-streaks", "daily-history-lead"]) $(id).textContent = "";
-    renderTodayStats(null, null);
     $("daily-history-section").hidden = true;
   }
   dailyScope = scope;
-  const extra = { day: matchDay };
+  // 「本周」只能靠关键词表达（日期控件说不出「哪一周」），单日仍走 day=
+  const extra = matchRange === "week" ? { range: "week" } : { day: matchRange };
   let r;
   try { r = await api("/api/daily", extra); }
   catch (error) {
-    if (request === dailyRequest && scope === `${params()}|${matchDay}`) {
+    if (request === dailyRequest && scope === `${params()}|${matchRange}`) {
       $("daily-plain").textContent = "战报读取失败，请重试。";
       $("daily-plain").className = "";
       $("daily-latest").hidden = true;
-      renderTodayStats(null, null);
     }
     return;
   }
-  if (request !== dailyRequest || scope !== `${params()}|${matchDay}`) return;
+  if (request !== dailyRequest || scope !== `${params()}|${matchRange}`) return;
   const s = r.summary;
-  matchDay = r.date;
-  $("d-date").value = r.date;
-  syncMatchDayBtns();
-  dailyScope = `${params()}|${r.date}`;
+  // 只有单日才回写日期控件：范围报告的 `date` 是这段范围的最后一天，
+  // 拿它回写会让状态从「本周」悄悄变成某一天（`r.range` 是范围关键词时为真）。
+  if (!r.range) {
+    matchRange = r.date;
+    $("d-date").value = r.date;
+    syncRangeBtns();
+  }
+  dailyScope = `${params()}|${r.range || r.date}`;
   dailyLatest = r.latest_date;
   $("daily-latest").hidden = s.n > 0 || !dailyLatest;
-  $("daily-asof").textContent = r.is_today ? "截至目前的已记录对局" : "历史日战报";
+  $("daily-asof").textContent = r.range === "week" ? "本周至今的已记录对局"
+    : r.range ? "所选范围内的已记录对局"
+    : r.is_today ? "截至目前的已记录对局" : "历史日战报";
   $("daily-plain").textContent = r.plain || "";
   $("daily-plain").hidden = !r.plain;  // 有对局但无亮点时后端给空串，不留空段落
   const dailyLevel = r.highlights?.[0]?.level;
   $("daily-plain").className = dailyLevel ? `daily-highlight ${dailyLevel}` : "";
   const pd = r.play_draw;
-  renderTodayStats(s, pd);
   // 这里原来有三行「当天最长 / 截至所选日期的当前连续 / 历史最长」加一句统计口径，
   // 再加一段「赛事 · N 场 · X 胜 Y 负 · 先手 a / 后手 b / 未知 c」的逐赛事罗列、
   // 常遇主将、BO 模式拆分、对手类型覆盖率（用户反馈：这些数据全都没必要）。
@@ -825,24 +874,9 @@ async function loadDaily() {
   }
 }
 
-// 今日那三行直接写进最顶上的全史卡里（用户口径 2026-09-15：「这种统计可以移到
-// 最顶上，跟今日先后手胜率放一块」）。空日与「全部日期」下清空——全史部分不受影响。
-// 先后手胜率来自后端 play_draw.play_wr / draw_wr（分母只算有胜负的对局）。
-function todaySideLine(rate, x, label) {
-  const parts = [`今日${label}率 ${rate ?? "–"}%`];
-  if (x && x.n) parts.push(`${label}胜率 ${x.wr}%（${x.wins} 胜 / ${x.n} 场）`);
-  return parts.join(" · ");
-}
-
-function renderTodayStats(s, pd) {
-  const has = !!(s && s.n);
-  $("k-total-today").textContent = has
-    ? `今日 ${s.wins} 胜 ${s.losses} 负 · 胜率 ${s.win_rate.wr ?? "–"}%` : "";
-  $("k-play-today").textContent = has
-    ? todaySideLine(pd?.day?.play_rate, pd?.day?.play_wr, "先手") : "";
-  $("k-draw-today").textContent = has
-    ? todaySideLine(pd?.day?.draw_rate, pd?.day?.draw_wr, "后手") : "";
-}
+// 顶部那三行「今日…」由 `loadOverview` / `renderTodayLines` 负责（在文件开头，
+// 因为它们是统计卡的一部分）。这里原来还有一份 `todaySideLine` + `renderTodayStats`，
+// 走的是当天战报的数据——选「昨天」时会把昨天的数字标成「今日」，2026-09-20 一并改掉。
 
 function fillSelect(sel, list) {
   const el = $(sel);
@@ -1166,34 +1200,56 @@ loadFilters().then(reload).catch((e) => {
   // 筛选都取不到时，reload 根本不会开始，所以要说明是整页没起来（R13.4）
   reportLoadFailures([["筛选条件", e]], true);
 });
-// 日期筛选：战报与对局明细共用同一份状态，改一次两边一起刷新
+// 战报与对局明细共用 `matchRange` 一份状态，改一次两边一起刷新。
+// 「本周」是一个范围而不是某一天，所以状态不再只存日期：`""`=全部日期、
+// `"week"`=本周、其余是 `YYYY-MM-DD`。
 function refreshDay() {
   loadDaily();
   loadMatches();
 }
-function setDay(day) {
-  matchDay = day || "";
-  $("d-date").value = matchDay;
+function setRange(value) {
+  matchRange = value || "";
+  // 只有具体某天才回写日期控件；「本周」下留空，免得看起来像选了个日期
+  $("d-date").value = isDayString(matchRange) ? matchRange : "";
   matchOffset = 0;
-  syncMatchDayBtns();
+  syncRangeBtns();
   refreshDay();
 }
-$("d-date").addEventListener("change", () => setDay($("d-date").value));
-$("daily-latest").addEventListener("click", () => { if (dailyLatest) setDay(dailyLatest); });
-$("d-today").addEventListener("click", () => setDay(localDay(new Date())));
+$("d-date").addEventListener("change", () => setRange($("d-date").value));
+$("daily-latest").addEventListener("click", () => { if (dailyLatest) setRange(dailyLatest); });
+$("d-today").addEventListener("click", () => setRange(localDay(new Date())));
 $("d-yesterday").addEventListener("click", () => {
-  const d = new Date(); d.setDate(d.getDate() - 1); setDay(localDay(d));
+  const d = new Date(); d.setDate(d.getDate() - 1); setRange(localDay(d));
 });
-$("d-all").addEventListener("click", () => setDay(""));
-function syncMatchDayBtns() {
+$("d-week").addEventListener("click", () => setRange("week"));
+$("d-all").addEventListener("click", () => setRange(""));
+function syncRangeBtns() {
   const today = localDay(new Date());
   const y = new Date(); y.setDate(y.getDate()-1);
   const yesterday = localDay(y);
-  $("d-today")?.classList.toggle("on", matchDay === today);
-  $("d-yesterday")?.classList.toggle("on", matchDay === yesterday);
-  $("d-all")?.classList.toggle("on", !matchDay);
+  $("d-today")?.classList.toggle("on", matchRange === today);
+  $("d-yesterday")?.classList.toggle("on", matchRange === yesterday);
+  $("d-week")?.classList.toggle("on", matchRange === "week");
+  $("d-all")?.classList.toggle("on", !matchRange);
 }
-syncMatchDayBtns();
+syncRangeBtns();
+
+// 顶部统计卡的范围按钮。与上面那排日期按钮**各管各的**：这里只重取
+// `/api/overview`，战报与明细不受影响。
+function setStatsRange(value) {
+  statsRange = value;
+  syncStatsRangeBtns();
+  loadOverview();
+}
+for (const id of ["s-today", "s-week", "s-month", "s-all"]) {
+  $(id).addEventListener("click", () => setStatsRange(id.slice(2)));
+}
+function syncStatsRangeBtns() {
+  for (const id of ["s-today", "s-week", "s-month", "s-all"]) {
+    $(id)?.classList.toggle("on", id.slice(2) === statsRange);
+  }
+}
+syncStatsRangeBtns();
 $("m-group").addEventListener("change", loadMatches);
 $("rd-focus").addEventListener("click", () => setRecentDecksScope("focus"));
 $("rd-all").addEventListener("click", () => setRecentDecksScope("all"));

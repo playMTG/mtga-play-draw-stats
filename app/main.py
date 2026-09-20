@@ -490,9 +490,18 @@ def api_overview(exclude_abnormal: bool = True, exclude_bot: bool = True,
                  event: str | None = None, deck: str | None = None,
                  deck_id: str | None = None,
                  family: str | None = None,
+                 range: str = "all",
                  mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
-    return q(stats.overview, exclude_abnormal, event, deck, exclude_bot,
-             family=family, mode=mode, deck_id=deck_id)
+    """`range` 是统计范围关键词（today/yesterday/week/month/all，或具体日期）。
+
+    非法取值由 `stats.range_bounds` 抛 ValueError → 422，与 /api/daily、
+    /api/matches 的日期校验同一种处理，不静默退回「全部」。
+    """
+    try:
+        return q(stats.overview, exclude_abnormal, event, deck, exclude_bot,
+                 family=family, mode=mode, deck_id=deck_id, range_key=range)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="统计范围应为 today/yesterday/week/month/all 或 YYYY-MM-DD")
 
 
 @app.get("/api/matches")
@@ -501,11 +510,13 @@ def api_matches(exclude_abnormal: bool = True, exclude_bot: bool = True,
                 deck: str | None = None, deck_id: str | None = None,
                 limit: int = Query(200, ge=1, le=1000), offset: int = Query(0, ge=0),
                 family: str | None = None, day: str | None = None,
+                range: str | None = None,
                 mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
     try:
         return q(stats.match_list, exclude_abnormal, event, deck,
                  limit, offset, cfg.get("card_name_lang", "zh"),
-                 exclude_bot, family=family, day=day, mode=mode, deck_id=deck_id)
+                 exclude_bot, family=family, day=day, mode=mode, deck_id=deck_id,
+                 range_key=range)
     except ValueError:
         raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 
@@ -680,11 +691,13 @@ def api_daily(day: str | None = None, exclude_abnormal: bool = True,
               exclude_bot: bool = True, event: str | None = None,
               deck: str | None = None, deck_id: str | None = None,
               family: str | None = None,
+              range: str | None = None,
               mode: str | None = Query(None, pattern="^(BO1|BO3|未知)$")):
+    """`day` 是单日；`range` 是范围关键词（week/month/…），两者互斥、`range` 优先。"""
     from .insights import daily_report
     try:
         return q(daily_report, day, exclude_abnormal, exclude_bot, event, deck,
-                 family, mode, deck_id)
+                 family, mode, deck_id, range_key=range)
     except ValueError:
         raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD")
 

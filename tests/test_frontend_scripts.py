@@ -24,6 +24,7 @@ NODE = shutil.which("node")
 # 逐个列举而非 glob：新增脚本时显式登记，避免夹带无关文件
 CJS_TESTS = [
     "test_daily_ui.cjs",
+    "test_top_stats_ui.cjs",
     "test_r9_ui.cjs",
     "test_deck_ui.cjs",
     "test_match_ui.cjs",

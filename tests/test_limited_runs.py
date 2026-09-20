@@ -45,14 +45,6 @@ def from_bank(text, bank, **fmt):
     return any(t.format(**fmt) == body for t in TEMPLATES[bank])
 
 
-def from_bank(text, bank, **fmt):
-    """这句评语是不是从该话术库里挑出来的（比匹配关键词更贴近要守的东西）。"""
-    fmt.setdefault('losses', 0)
-    fmt.setdefault('cap', 0)
-    body = text.rstrip('。')
-    return any(t.format(**fmt) == body for t in TEMPLATES[bank])
-
-
 # ---------- 赛事规格 ----------
 
 def test_specs_match_the_official_reward_tables():
@@ -61,6 +53,11 @@ def test_specs_match_the_official_reward_tables():
     assert spec_for(PICKTWO).cap_losses == 2
     assert spec_for(PREMIER).cap_wins == 7
     assert spec_for(PREMIER).cap_losses == 3
+    # 快速轮抽：7 胜／3 负结束，回本线是**用户口径**的 4 胜
+    # （按「宝石 + 1 包 ≈ 200 宝石」折算，4 胜 ≈ 710 其实差一点点，5 胜才过线）
+    assert spec_for(QUICK).cap_wins == 7
+    assert spec_for(QUICK).cap_losses == 3
+    assert spec_for(QUICK).break_even == 4
     assert spec_for('Sealed_DMU_20220901').label == '现开'
     assert spec_for('Trad_Sealed_ONE_20230207').label == '传统现开'
     # 标签从 event_names 派生，带系列与日期的那一截要丢掉
@@ -91,6 +88,10 @@ def test_bands_follow_the_user_definition():
     assert band(premier, 3) == 'even'      # 3 胜回了
     assert band(premier, 2) == 'low'
     assert band(premier, 0) == 'bust'
+    # 快速轮抽（用户 2026-09-20 定：4 胜就当回了）——4 与 5 都落 `even`
+    quick = spec_for(QUICK)
+    assert [band(quick, w) for w in range(8)] == [
+        'bust', 'low', 'low', 'low', 'even', 'even', 'near', 'cap']
     # 现开回本线是 6 胜，而 6 也是「差一把卷」——按用户口径「差一把」优先
     assert band(spec_for('Sealed_DMU_20220901'), 6) == 'near'
     assert band(spec_for('TradDraft_ONE_20230207'), 3) == 'cap'
